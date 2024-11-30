@@ -4,261 +4,143 @@ const AnalysisTool = require('./AnalysisTool');
 class ARIMAAnalysis extends AnalysisTool {
     constructor() {
         super('ARIMA Analysis');
-        this.minSamples = 50;
-        this.p = 2;  // Autoregressive order
-        this.d = 1;  // Difference order
-        this.q = 2;  // Moving average order
+        this.p = 2; // autoregressive order
+        this.d = 1; // difference order
+        this.q = 2; // moving average order
+        this.minSamples = 30;
         this.debugLog = [];
+        this.tensors = new Set();
+    }
+
+    // Keep track of tensors
+    trackTensor(tensor) {
+        this.tensors.add(tensor);
+        return tensor;
+    }
+
+    // Clean up tensors
+    cleanup() {
+        this.tensors.forEach(tensor => {
+            if (tensor && tensor.dispose) {
+                tensor.dispose();
+            }
+        });
+        this.tensors.clear();
+    }
+
+    // Convert symbols to numerical values
+    symbolToNumber(symbol) {
+        const mapping = { '♠': 0, '♣': 1, '♥': 2, '♦': 3 };
+        return mapping[symbol] ?? -1;
+    }
+
+    numberToSymbol(number) {
+        const mapping = ['♠', '♣', '♥', '♦'];
+        return mapping[Math.round(number) % 4] ?? null;
     }
 
     // Calculate differences
     difference(data, order = 1) {
         if (order === 0) return data;
-        const diff = [];
+        const diffed = [];
         for (let i = order; i < data.length; i++) {
-            diff.push(data[i] - data[i - order]);
+            diffed.push(data[i] - data[i - order]);
         }
-        return diff;
+        return diffed;
     }
 
-    // Calculate autoregressive terms
-    calculateAR(data, order) {
-        const matrix = [];
-        const y = [];
-        for (let i = order; i < data.length; i++) {
-            const row = [];
-            for (let j = 1; j <= order; j++) {
-                row.push(data[i - j]);
-            }
-            matrix.push(row);
-            y.push(data[i]);
-        }
-        return { matrix, y };
-    }
-
-    // Calculate moving average terms
-    calculateMA(data, order, errors) {
-        const matrix = [];
-        for (let i = order; i < data.length; i++) {
-            const row = [];
-            for (let j = 1; j <= order; j++) {
-                row.push(errors[i - j] || 0);
-            }
-            matrix.push(row);
-        }
-        return matrix;
-    }
-
-    // Fit ARIMA model
-    async fit(data) {
-        const tensors = [];  // Keep track of tensors to dispose later
-        try {
-            this.debugLog.push('Starting ARIMA model fitting');
-            
-            // Apply differencing
-            let diffData = this.difference(data, this.d);
-            this.debugLog.push(`Applied differencing of order ${this.d}`);
-
-            // Calculate AR terms
-            const { matrix: arMatrix, y } = this.calculateAR(diffData, this.p);
-            this.debugLog.push(`Calculated AR terms of order ${this.p}`);
-
-            // Ensure matrix is properly formatted for tensor2d
-            const formattedMatrix = arMatrix.map(row => Array.from(row));
-            const X = tf.keep(tf.tensor2d(formattedMatrix));
-            tensors.push(X);
-            const Y = tf.keep(tf.tensor1d(Array.from(y)));
-            tensors.push(Y);
-
-            // Fit AR model using pseudoinverse for better numerical stability
-            const Xt = tf.keep(X.transpose());
-            tensors.push(Xt);
-            const XtX = tf.keep(Xt.matMul(X));
-            tensors.push(XtX);
-            const XtY = tf.keep(Xt.matMul(Y.expandDims(1)));
-            tensors.push(XtY);
-            
-            // Convert to array for pseudoinverse calculation
-            const XtXArray = XtX.arraySync();
-            const pseudoInvResult = this.pseudoInverse(XtXArray);
-            
-            // Convert back to tensor for final calculation
-            const XtXInv = tf.keep(tf.tensor2d(pseudoInvResult));
-            tensors.push(XtXInv);
-            const coefficients = tf.keep(XtXInv.matMul(XtY).squeeze());
-            tensors.push(coefficients);
-
-            // Calculate residuals
-            const predicted = tf.keep(X.matMul(coefficients.expandDims(1)).squeeze());
-            tensors.push(predicted);
-            const errors = tf.sub(Y, predicted).arraySync();
-            this.debugLog.push('Calculated model residuals');
-
-            // Calculate MA terms
-            const maMatrix = this.calculateMA(diffData, this.q, errors);
-            this.debugLog.push(`Calculated MA terms of order ${this.q}`);
-
-            // Store results before cleaning up tensors
-            const results = {
-                arCoef: coefficients.arraySync(),
-                maMatrix,
-                lastValues: data.slice(-this.p),
-                lastErrors: errors.slice(-this.q)
-            };
-
-            // Clean up tensors only after we're done using them
-            tensors.forEach(tensor => {
-                if (tensor && tensor.dispose) {
-                    tensor.dispose();
-                }
-            });
-
-            return results;
-
-        } catch (error) {
-            // Clean up tensors in case of error
-            tensors.forEach(tensor => {
-                if (tensor && tensor.dispose) {
-                    tensor.dispose();
-                }
-            });
-            this.debugLog.push(`Error in model fitting: ${error.message}`);
-            throw error;
-        }
-    }
-
-    // Helper method for matrix pseudoinverse
-    pseudoInverse(matrix) {
-        const svd = this.singularValueDecomposition(matrix);
-        const threshold = 1e-10;
-        const s = svd.s.map(val => (Math.abs(val) < threshold ? 0 : 1 / val));
-        
-        const n = matrix[0].length;
-        const Vt = this.transpose(svd.V);
-        const U = svd.U;
-        
-        // Compute pseudoinverse
-        const result = Array(n).fill().map(() => Array(n).fill(0));
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) {
-                for (let k = 0; k < n; k++) {
-                    result[i][j] += Vt[i][k] * s[k] * U[j][k];
-                }
-            }
+    // Inverse difference
+    inverseDifference(diffed, original, order = 1) {
+        if (order === 0) return diffed;
+        const result = [];
+        let lastOriginal = original[original.length - 1];
+        for (const diff of diffed) {
+            const value = diff + lastOriginal;
+            result.push(value);
+            lastOriginal = value;
         }
         return result;
     }
 
-    // Singular Value Decomposition implementation
-    singularValueDecomposition(A) {
-        const n = A.length;
-        let U = Array(n).fill().map(() => Array(n).fill(0));
-        let V = Array(n).fill().map(() => Array(n).fill(0));
-        let s = Array(n).fill(0);
-
-        // Simple SVD implementation for 2x2 matrices (sufficient for AR(2) model)
-        if (n === 2) {
-            const a = A[0][0], b = A[0][1], c = A[1][0], d = A[1][1];
-            const theta = 0.5 * Math.atan2(2 * (a * c + b * d), a * a + b * b - c * c - d * d);
-            const cost = Math.cos(theta), sint = Math.sin(theta);
-            
-            U = [[cost, -sint], [sint, cost]];
-            V = [[cost, -sint], [sint, cost]];
-            
-            const B = this.matrixMultiply(this.matrixMultiply(this.transpose(U), A), V);
-            s = [B[0][0], B[1][1]];
-        } else {
-            // For larger matrices, use a simpler approximation
-            for (let i = 0; i < n; i++) {
-                s[i] = Math.sqrt(A[i].reduce((sum, val) => sum + val * val, 0));
-                U[i][i] = 1;
-                V[i][i] = 1;
-            }
-        }
-
-        return { U, s, V };
-    }
-
-    // Helper method for matrix multiplication
-    matrixMultiply(A, B) {
-        const n = A.length;
-        const result = Array(n).fill().map(() => Array(n).fill(0));
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) {
-                for (let k = 0; k < n; k++) {
-                    result[i][j] += A[i][k] * B[k][j];
-                }
-            }
-        }
-        return result;
-    }
-
-    // Helper method for matrix transpose
-    transpose(matrix) {
-        return matrix[0].map((_, i) => matrix.map(row => row[i]));
-    }
-
-    // Make prediction
-    async predict(model, data) {
-        const tensors = [];  // Keep track of tensors
+    // Fit AR model using tensorflow
+    async fitAR(data, order) {
         try {
-            this.debugLog.push('Starting prediction');
-            
-            // Calculate AR component
-            let arComponent = 0;
-            const coefficients = tf.keep(tf.tensor1d(model.arCoef));
-            tensors.push(coefficients);
-            
-            const lastValues = tf.keep(tf.tensor1d(data.slice(-this.p)));
-            tensors.push(lastValues);
-            
-            arComponent = tf.sum(tf.mul(coefficients, lastValues)).arraySync();
-
-            // Calculate MA component
-            let maComponent = 0;
-            for (let i = 0; i < this.q; i++) {
-                maComponent += 0.1 * model.lastErrors[i]; // Simple MA coefficient
+            const X = [];
+            const y = [];
+            for (let i = order; i < data.length; i++) {
+                X.push(data.slice(i - order, i));
+                y.push(data[i]);
             }
 
-            // Combine components
-            const prediction = arComponent + maComponent;
-            this.debugLog.push(`Prediction components - AR: ${arComponent}, MA: ${maComponent}`);
+            const xTensor = this.trackTensor(tf.tensor2d(X));
+            const yTensor = this.trackTensor(tf.tensor1d(y));
 
-            // Map to nearest valid symbol
-            const symbols = ['♠', '♣', '♥', '♦'];
-            const symbolIndex = Math.floor((prediction + 2) % 4);
-            const confidence = Math.min(0.95, Math.abs(prediction - Math.floor(prediction)));
-
-            // Clean up tensors
-            tensors.forEach(tensor => {
-                if (tensor && tensor.dispose) {
-                    tensor.dispose();
-                }
+            const model = tf.sequential();
+            model.add(tf.layers.dense({ units: 1, inputShape: [order] }));
+            
+            await model.compile({
+                optimizer: tf.train.adam(0.01),
+                loss: 'meanSquaredError'
             });
 
-            return {
-                prediction: symbols[symbolIndex],
-                confidence,
-                components: { ar: arComponent, ma: maComponent }
-            };
+            await model.fit(xTensor, yTensor, {
+                epochs: 100,
+                verbose: 0
+            });
 
+            return model;
         } catch (error) {
-            // Clean up tensors in case of error
-            tensors.forEach(tensor => {
-                if (tensor && tensor.dispose) {
-                    tensor.dispose();
-                }
-            });
-            this.debugLog.push(`Error in prediction: ${error.message}`);
+            this.debugLog.push(`AR model fitting error: ${error.message}`);
             throw error;
         }
     }
 
-    // Main analysis method
+    // Predict next value using the ARIMA model
+    async predict(data) {
+        try {
+            // Difference the data
+            let diffed = this.difference(data, this.d);
+            
+            // Fit AR model
+            const model = await this.fitAR(diffed, this.p);
+            
+            // Prepare last p values for prediction
+            const lastValues = diffed.slice(-this.p);
+            const input = this.trackTensor(tf.tensor2d([lastValues]));
+            
+            // Make prediction
+            const diffPrediction = model.predict(input);
+            const predictionValue = await diffPrediction.data();
+            
+            // Inverse difference
+            const prediction = this.inverseDifference(
+                [predictionValue[0]], 
+                data,
+                this.d
+            )[0];
+
+            return prediction;
+        } catch (error) {
+            this.debugLog.push(`Prediction error: ${error.message}`);
+            throw error;
+        }
+    }
+
     async analyze(symbols) {
         try {
             this.debugLog = [];
             this.debugLog.push(`Starting ARIMA analysis with ${symbols.length} symbols`);
+
+            // Validate input
+            if (!Array.isArray(symbols)) {
+                this.debugLog.push('Invalid input: symbols must be an array');
+                return {
+                    prediction: null,
+                    confidence: 0,
+                    message: 'Invalid input format',
+                    debug: this.debugLog
+                };
+            }
 
             if (symbols.length < this.minSamples) {
                 this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
@@ -270,37 +152,64 @@ class ARIMAAnalysis extends AnalysisTool {
                 };
             }
 
-            // Convert symbols to numerical values
-            const numericalData = symbols.map(s => {
-                switch (s) {
-                    case '♠': return 0;
-                    case '♣': return 1;
-                    case '♥': return 2;
-                    case '♦': return 3;
-                    default: return 0;
+            // Filter and convert valid symbols to numbers
+            const validSymbols = ['♠', '♣', '♥', '♦'];
+            const numericalData = [];
+            const invalidSymbols = new Set();
+
+            for (let i = 0; i < symbols.length; i++) {
+                const symbol = symbols[i];
+                if (validSymbols.includes(symbol)) {
+                    numericalData.push(this.symbolToNumber(symbol));
+                } else {
+                    invalidSymbols.add(symbol);
                 }
-            });
+            }
 
-            // Fit model
-            const model = await this.fit(numericalData);
-            this.debugLog.push('Model fitted successfully');
+            // Log invalid symbols if found
+            if (invalidSymbols.size > 0) {
+                this.debugLog.push(`Found invalid symbols: ${Array.from(invalidSymbols).join(', ')}`);
+            }
 
-            // Make prediction
-            const result = await this.predict(model, numericalData);
-            this.debugLog.push(`Prediction made: ${result.prediction} with confidence ${result.confidence}`);
+            // Check if we have enough valid data after filtering
+            if (numericalData.length < this.minSamples) {
+                this.debugLog.push(`Insufficient valid symbols after filtering: ${numericalData.length} < ${this.minSamples}`);
+                return {
+                    prediction: null,
+                    confidence: 0,
+                    message: 'Insufficient valid symbols',
+                    debug: this.debugLog
+                };
+            }
+
+            // Log data quality metrics
+            const validRatio = numericalData.length / symbols.length;
+            this.debugLog.push(`Data quality: ${(validRatio * 100).toFixed(1)}% valid symbols`);
+
+            // Make prediction with valid data
+            const numericPrediction = await this.predict(numericalData);
+            const prediction = this.numberToSymbol(numericPrediction);
+
+            // Adjust confidence based on data quality
+            let confidence = Math.min(0.95, 0.7 + this.getAccuracy());
+            confidence *= validRatio; // Reduce confidence if we had to filter out invalid symbols
 
             // Update prediction history
-            this.addPrediction(result.prediction);
+            this.addPrediction(prediction);
 
             return {
-                prediction: result.prediction,
-                confidence: result.confidence,
-                components: result.components,
-                debug: this.debugLog
+                prediction,
+                confidence,
+                debug: {
+                    numericalPrediction: numericPrediction,
+                    validSymbols: numericalData.length,
+                    totalSymbols: symbols.length,
+                    dataQuality: validRatio,
+                    log: this.debugLog
+                }
             };
 
         } catch (error) {
-            this.debugLog.push(`Error in analysis: ${error.message}`);
             console.error('[ARIMA] Analysis error:', error);
             return {
                 prediction: null,
@@ -308,9 +217,10 @@ class ARIMAAnalysis extends AnalysisTool {
                 error: error.message,
                 debug: this.debugLog
             };
+        } finally {
+            this.cleanup();
         }
     }
 }
 
-// Export the ARIMAAnalysis class
 module.exports = ARIMAAnalysis;
