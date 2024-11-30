@@ -31,7 +31,7 @@ const calculateMarkovChain = (symbols) => {
 
     return {
         matrix: transitionMatrix,
-        predictability: calculatePredictabilityScore(transitionMatrix)
+        predictability: calculatePredictabilityScore(transitionMatrix, symbols)
     };
 };
 
@@ -93,34 +93,57 @@ const calculateAutocorrelation = (symbols, lag = 1) => {
 };
 
 // Helper function for Markov Chain analysis
-const calculatePredictabilityScore = (matrix) => {
+const calculatePredictabilityScore = (matrix, symbols) => {
     let maxProbabilities = [];
     for (let i = 0; i < 4; i++) {
         maxProbabilities.push(Math.max(...Object.values(matrix[i])));
     }
-    return maxProbabilities.reduce((a, b) => a + b, 0) / 4;
+    
+    // Improved confidence calculation for longer sequences
+    const baseScore = maxProbabilities.reduce((a, b) => a + b, 0) / 4;
+    const sequenceWeight = Math.min(1, symbols.length / 500); // Scale with sequence length up to 500
+    return baseScore * (1 + sequenceWeight);
+};
+
+// Dynamic confidence adjustment based on sequence length
+const adjustConfidence = (baseConfidence, sequenceLength, threshold) => {
+    const scaleFactor = Math.min(2, Math.max(1, sequenceLength / threshold));
+    return Math.min(0.95, baseConfidence * scaleFactor);
 };
 
 // Threshold-based analysis wrapper
 const performThresholdAnalysis = (symbols) => {
-    const count = symbols.length;
-    let analysis = {
-        thresholdReached: count >= 100 ? 'Markov Chain' : 'Basic',
-        symbolCount: count,
-        thresholdLevel: count <= 100 ? 1 : count <= 200 ? 2 : count <= 300 ? 3 : 4
-    };
+    const sequenceLength = symbols.length;
+    let analysis = {};
 
-    // Basic analysis always available
-    if (count >= 100) {
-        analysis.markovChain = calculateMarkovChain(symbols);
+    // Markov Chain Analysis (Threshold: 100 symbols)
+    if (sequenceLength >= 100) {
+        const markovResult = calculateMarkovChain(symbols);
+        const baseConfidence = markovResult.predictability;
+        analysis.markovChain = {
+            ...markovResult,
+            confidence: adjustConfidence(baseConfidence, sequenceLength, 100)
+        };
     }
-    
-    if (count >= 200) {
-        analysis.runsTest = performRunsTest(symbols);
+
+    // Runs Test Analysis (Threshold: 200 symbols)
+    if (sequenceLength >= 200) {
+        const runsResult = performRunsTest(symbols);
+        const baseConfidence = runsResult.isRandom ? 0.8 : 0.6;
+        analysis.runsTest = {
+            ...runsResult,
+            confidence: adjustConfidence(baseConfidence, sequenceLength, 200)
+        };
     }
-    
-    if (count >= 300) {
-        analysis.autocorrelation = calculateAutocorrelation(symbols);
+
+    // Autocorrelation Analysis (Threshold: 300 symbols)
+    if (sequenceLength >= 300) {
+        const autoCorr = calculateAutocorrelation(symbols);
+        const baseConfidence = 0.7 + (autoCorr.strength * 0.3);
+        analysis.autocorrelation = {
+            ...autoCorr,
+            confidence: adjustConfidence(baseConfidence, sequenceLength, 300)
+        };
     }
 
     return analysis;

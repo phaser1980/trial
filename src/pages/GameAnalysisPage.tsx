@@ -172,45 +172,53 @@ const transformMatrix = (matrixRecord: { [key: string]: { [key: string]: number 
 
 // Analysis data transformer
 function transformAnalysisData(backendData: BackendAnalysis | null): AnalysisData {
-  if (!backendData) return {};
+  if (!backendData || !backendData.analyses) return {
+    markovChain: { confidence: 0 },
+    entropy: { confidence: 0 },
+    chiSquare: { confidence: 0 },
+    monteCarlo: { confidence: 0 },
+    arima: { confidence: 0 },
+    lstm: { confidence: 0 },
+    hmm: { confidence: 0 }
+  };
 
   return {
     markovChain: backendData.analyses.markovChain ? {
       matrix: transformMatrix(backendData.analyses.markovChain.matrix),
       predictedNext: backendData.analyses.markovChain.prediction,
-      confidence: backendData.analyses.markovChain.confidence
-    } : undefined,
+      confidence: backendData.analyses.markovChain.confidence || 0
+    } : { confidence: 0 },
     entropy: backendData.analyses.entropy ? {
       value: backendData.analyses.entropy.entropy,
       predictedNext: backendData.analyses.entropy.prediction,
-      confidence: backendData.analyses.entropy.confidence
-    } : undefined,
+      confidence: backendData.analyses.entropy.confidence || 0
+    } : { confidence: 0 },
     chiSquare: backendData.analyses.chiSquare ? {
       value: backendData.analyses.chiSquare.chiSquare,
       predictedNext: backendData.analyses.chiSquare.prediction,
-      confidence: backendData.analyses.chiSquare.confidence
-    } : undefined,
+      confidence: backendData.analyses.chiSquare.confidence || 0
+    } : { confidence: 0 },
     monteCarlo: backendData.analyses.monteCarlo ? {
       predictedNext: backendData.analyses.monteCarlo.prediction,
-      confidence: backendData.analyses.monteCarlo.confidence
-    } : undefined,
+      confidence: backendData.analyses.monteCarlo.confidence || 0
+    } : { confidence: 0 },
     arima: backendData.analyses.arima ? {
       predictedNext: backendData.analyses.arima.prediction,
-      confidence: backendData.analyses.arima.confidence,
+      confidence: backendData.analyses.arima.confidence || 0,
       params: backendData.analyses.arima.params,
       error: backendData.analyses.arima.error
-    } : undefined,
+    } : { confidence: 0 },
     lstm: backendData.analyses.lstm ? {
       predictedNext: backendData.analyses.lstm.prediction,
-      confidence: backendData.analyses.lstm.confidence,
-      probabilities: backendData.analyses.lstm.probabilities,
-      isTraining: backendData.analyses.lstm.isTraining
-    } : undefined,
+      confidence: backendData.analyses.lstm.confidence || 0,
+      probabilities: backendData.analyses.lstm.probabilities || [],
+      isTraining: backendData.analyses.lstm.isTraining || false
+    } : { confidence: 0, probabilities: [], isTraining: false },
     hmm: backendData.analyses.hmm ? {
       predictedNext: backendData.analyses.hmm.prediction,
-      confidence: backendData.analyses.hmm.confidence,
-      stateSequence: backendData.analyses.hmm.stateSequence
-    } : undefined
+      confidence: backendData.analyses.hmm.confidence || 0,
+      stateSequence: backendData.analyses.hmm.stateSequence || []
+    } : { confidence: 0, stateSequence: [] }
   };
 }
 
@@ -428,13 +436,26 @@ const GameAnalysisPage: React.FC = () => {
             ) : (
               <Grid container spacing={2}>
                 {Object.entries({
+                  // Always show basic models
                   'Markov': { type: 'markov', ...analysisData.markovChain },
                   'Entropy': { type: 'entropy', ...analysisData.entropy },
                   'Chi²': { type: 'chiSquare', ...analysisData.chiSquare },
-                  'Monte Carlo': { type: 'monteCarlo', ...analysisData.monteCarlo },
-                  'ARIMA': { type: 'arima', ...analysisData.arima },
-                  'LSTM': { type: 'lstm', ...analysisData.lstm },
-                  'HMM': { type: 'hmm', ...analysisData.hmm }
+                  // Show Monte Carlo after 100 symbols
+                  ...(sequence.length >= 100 ? {
+                    'Monte Carlo': { type: 'monteCarlo', ...analysisData.monteCarlo }
+                  } : {}),
+                  // Show ARIMA after 150 symbols
+                  ...(sequence.length >= 150 ? {
+                    'ARIMA': { type: 'arima', ...analysisData.arima }
+                  } : {}),
+                  // Show LSTM after 200 symbols
+                  ...(sequence.length >= 200 ? {
+                    'LSTM': { type: 'lstm', ...analysisData.lstm }
+                  } : {}),
+                  // Show HMM after 300 symbols
+                  ...(sequence.length >= 300 ? {
+                    'HMM': { type: 'hmm', ...analysisData.hmm }
+                  } : {})
                 } as Record<string, AnalysisType>).map(([name, data]) => (
                   data && (
                     <Grid item xs={8} key={name}>
@@ -457,7 +478,7 @@ const GameAnalysisPage: React.FC = () => {
                           }}
                         >
                           {name}
-                          {data.type === 'arima' && data.error && (
+                          {data?.type === 'arima' && data?.error && (
                             <Tooltip title={data.error}>
                               <IconButton size="small" color="warning">
                                 <InfoIcon fontSize="small" />
@@ -467,16 +488,16 @@ const GameAnalysisPage: React.FC = () => {
                         </Typography>
                         <Typography variant="body1">
                           Next: <strong>
-                            {data.predictedNext !== undefined ? 
+                            {data?.predictedNext !== undefined ? 
                               symbols[data.predictedNext] : 
                               'N/A'
                             }
                           </strong>
                         </Typography>
                         <Typography variant="caption" display="block" color="text.secondary">
-                          Conf: {data.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'N/A'}
+                          Conf: {data?.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'N/A'}
                         </Typography>
-                        {data.type === 'arima' && data.params && (
+                        {data?.type === 'arima' && data?.params && (
                           <>
                             <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
                               Model Parameters:
@@ -503,7 +524,7 @@ const GameAnalysisPage: React.FC = () => {
                             )}
                           </>
                         )}
-                        {data.type === 'lstm' && (
+                        {data?.type === 'lstm' && (
                           <>
                             <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
                               LSTM State:
@@ -521,7 +542,7 @@ const GameAnalysisPage: React.FC = () => {
                                 </Typography>
                               ) : (
                                 <>
-                                  {data.probabilities && (
+                                  {data.probabilities && data.probabilities.length > 0 && (
                                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                                       Probabilities:<br/>
                                       {data.probabilities.map((p, i) => 
@@ -534,7 +555,7 @@ const GameAnalysisPage: React.FC = () => {
                             </Box>
                           </>
                         )}
-                        {data.type === 'hmm' && (
+                        {data?.type === 'hmm' && (
                           <>
                             <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
                               HMM State:
@@ -546,7 +567,7 @@ const GameAnalysisPage: React.FC = () => {
                               borderRadius: 1,
                               fontSize: '0.875rem'
                             }}>
-                              {data.stateSequence && (
+                              {data.stateSequence && data.stateSequence.length > 0 && (
                                 <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                                   Last States: {data.stateSequence.slice(-5).join(' → ')}
                                 </Typography>
