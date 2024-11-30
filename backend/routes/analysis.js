@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const tf = require('@tensorflow/tfjs');
 
 // ModelManager Class for handling model weights and performance
 class ModelManager {
