@@ -1,7 +1,9 @@
 const tf = require('@tensorflow/tfjs');
+const AnalysisTool = require('./AnalysisTool');
 
-class ARIMAAnalysis {
+class ARIMAAnalysis extends AnalysisTool {
     constructor() {
+        super('ARIMA Analysis');
         this.minSamples = 50;
         this.p = 2;  // Autoregressive order
         this.d = 1;  // Difference order
@@ -49,6 +51,7 @@ class ARIMAAnalysis {
 
     // Fit ARIMA model
     async fit(data) {
+        const tensors = [];  // Keep track of tensors to dispose later
         try {
             this.debugLog.push('Starting ARIMA model fitting');
             
@@ -60,21 +63,34 @@ class ARIMAAnalysis {
             const { matrix: arMatrix, y } = this.calculateAR(diffData, this.p);
             this.debugLog.push(`Calculated AR terms of order ${this.p}`);
 
-            // Convert to tensors
-            const X = tf.tensor2d(arMatrix);
-            const Y = tf.tensor1d(y);
+            // Ensure matrix is properly formatted for tensor2d
+            const formattedMatrix = arMatrix.map(row => Array.from(row));
+            const X = tf.keep(tf.tensor2d(formattedMatrix));
+            tensors.push(X);
+            const Y = tf.keep(tf.tensor1d(Array.from(y)));
+            tensors.push(Y);
 
             // Fit AR model using pseudoinverse for better numerical stability
-            const Xt = X.transpose();
-            const XtX = Xt.matMul(X);
-            const XtY = Xt.matMul(Y.expandDims(1));
+            const Xt = tf.keep(X.transpose());
+            tensors.push(Xt);
+            const XtX = tf.keep(Xt.matMul(X));
+            tensors.push(XtX);
+            const XtY = tf.keep(Xt.matMul(Y.expandDims(1)));
+            tensors.push(XtY);
             
-            // Use pseudoinverse instead of solve
-            const XtXInv = tf.tensor2d(this.pseudoInverse(XtX.arraySync()));
-            const coefficients = tf.tensor2d(XtXInv).matMul(XtY).squeeze();
+            // Convert to array for pseudoinverse calculation
+            const XtXArray = XtX.arraySync();
+            const pseudoInvResult = this.pseudoInverse(XtXArray);
+            
+            // Convert back to tensor for final calculation
+            const XtXInv = tf.keep(tf.tensor2d(pseudoInvResult));
+            tensors.push(XtXInv);
+            const coefficients = tf.keep(XtXInv.matMul(XtY).squeeze());
+            tensors.push(coefficients);
 
             // Calculate residuals
-            const predicted = X.matMul(coefficients.expandDims(1)).squeeze();
+            const predicted = tf.keep(X.matMul(coefficients.expandDims(1)).squeeze());
+            tensors.push(predicted);
             const errors = tf.sub(Y, predicted).arraySync();
             this.debugLog.push('Calculated model residuals');
 
@@ -82,14 +98,30 @@ class ARIMAAnalysis {
             const maMatrix = this.calculateMA(diffData, this.q, errors);
             this.debugLog.push(`Calculated MA terms of order ${this.q}`);
 
-            return {
+            // Store results before cleaning up tensors
+            const results = {
                 arCoef: coefficients.arraySync(),
                 maMatrix,
                 lastValues: data.slice(-this.p),
                 lastErrors: errors.slice(-this.q)
             };
 
+            // Clean up tensors only after we're done using them
+            tensors.forEach(tensor => {
+                if (tensor && tensor.dispose) {
+                    tensor.dispose();
+                }
+            });
+
+            return results;
+
         } catch (error) {
+            // Clean up tensors in case of error
+            tensors.forEach(tensor => {
+                if (tensor && tensor.dispose) {
+                    tensor.dispose();
+                }
+            });
             this.debugLog.push(`Error in model fitting: ${error.message}`);
             throw error;
         }
@@ -168,14 +200,19 @@ class ARIMAAnalysis {
 
     // Make prediction
     async predict(model, data) {
+        const tensors = [];  // Keep track of tensors
         try {
             this.debugLog.push('Starting prediction');
             
             // Calculate AR component
             let arComponent = 0;
-            for (let i = 0; i < this.p; i++) {
-                arComponent += model.arCoef[i] * data[data.length - 1 - i];
-            }
+            const coefficients = tf.keep(tf.tensor1d(model.arCoef));
+            tensors.push(coefficients);
+            
+            const lastValues = tf.keep(tf.tensor1d(data.slice(-this.p)));
+            tensors.push(lastValues);
+            
+            arComponent = tf.sum(tf.mul(coefficients, lastValues)).arraySync();
 
             // Calculate MA component
             let maComponent = 0;
@@ -192,6 +229,13 @@ class ARIMAAnalysis {
             const symbolIndex = Math.floor((prediction + 2) % 4);
             const confidence = Math.min(0.95, Math.abs(prediction - Math.floor(prediction)));
 
+            // Clean up tensors
+            tensors.forEach(tensor => {
+                if (tensor && tensor.dispose) {
+                    tensor.dispose();
+                }
+            });
+
             return {
                 prediction: symbols[symbolIndex],
                 confidence,
@@ -199,6 +243,12 @@ class ARIMAAnalysis {
             };
 
         } catch (error) {
+            // Clean up tensors in case of error
+            tensors.forEach(tensor => {
+                if (tensor && tensor.dispose) {
+                    tensor.dispose();
+                }
+            });
             this.debugLog.push(`Error in prediction: ${error.message}`);
             throw error;
         }
@@ -206,20 +256,20 @@ class ARIMAAnalysis {
 
     // Main analysis method
     async analyze(symbols) {
-        this.debugLog = [];
-        this.debugLog.push(`Starting ARIMA analysis with ${symbols.length} symbols`);
-
-        if (symbols.length < this.minSamples) {
-            this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
-            return {
-                prediction: null,
-                confidence: 0,
-                message: 'Insufficient data',
-                debug: this.debugLog
-            };
-        }
-
         try {
+            this.debugLog = [];
+            this.debugLog.push(`Starting ARIMA analysis with ${symbols.length} symbols`);
+
+            if (symbols.length < this.minSamples) {
+                this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
+                return {
+                    prediction: null,
+                    confidence: 0,
+                    message: 'Insufficient data',
+                    debug: this.debugLog
+                };
+            }
+
             // Convert symbols to numerical values
             const numericalData = symbols.map(s => {
                 switch (s) {
@@ -238,6 +288,9 @@ class ARIMAAnalysis {
             // Make prediction
             const result = await this.predict(model, numericalData);
             this.debugLog.push(`Prediction made: ${result.prediction} with confidence ${result.confidence}`);
+
+            // Update prediction history
+            this.addPrediction(result.prediction);
 
             return {
                 prediction: result.prediction,
@@ -259,4 +312,5 @@ class ARIMAAnalysis {
     }
 }
 
+// Export the ARIMAAnalysis class
 module.exports = ARIMAAnalysis;

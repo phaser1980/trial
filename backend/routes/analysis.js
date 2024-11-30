@@ -5,6 +5,7 @@ const tf = require('@tensorflow/tfjs');
 const PredictionTracker = require('../utils/predictionTracker');
 const { HybridModel, ErrorCorrection } = require('../utils/hybridModel');
 const ARIMAAnalysis = require('../utils/arimaAnalysis');
+const AnalysisTool = require('../utils/AnalysisTool');
 
 // Initialize prediction tracker and hybrid model
 const predictionTracker = new PredictionTracker();
@@ -276,87 +277,7 @@ class ModelManager {
 // Initialize model manager
 const modelManager = new ModelManager();
 
-// Base class for all analysis tools
-class AnalysisTool {
-  constructor(name) {
-    this.name = name;
-    this.internalName = name.toLowerCase().replace(/\s+/g, '');
-    this.maxRecentData = 100;
-    this.recentData = [];
-    this.lastPrediction = null;
-    this.predictionHistory = [];
-    this.accuracy = 0;
-    this.predictionCount = 0;
-    this.correctPredictions = 0;
-  }
-
-  getModelState() {
-    return {
-      name: this.name,
-      recentDataSize: this.recentData.length,
-      lastPrediction: this.lastPrediction
-    };
-  }
-
-  getAverageAccuracy() {
-    if (!this.predictionHistory.length) return 0;
-    const correct = this.predictionHistory.filter(p => p).length;
-    return correct / this.predictionHistory.length;
-  }
-
-  updateAccuracy(actual) {
-    if (this.lastPrediction !== null && actual !== undefined) {
-      const wasCorrect = this.lastPrediction === actual;
-      this.predictionHistory.push(wasCorrect);
-      // Keep only recent history
-      if (this.predictionHistory.length > 50) {
-        this.predictionHistory = this.predictionHistory.slice(-50);
-      }
-    }
-  }
-
-  updateAccuracy(wasCorrect) {
-    this.predictionCount++;
-    if (wasCorrect) {
-      this.correctPredictions++;
-    }
-    this.accuracy = this.correctPredictions / this.predictionCount;
-  }
-
-  getAccuracy() {
-    return this.accuracy;
-  }
-
-  getModelWeight() {
-    return 1.0; // Base weight, can be overridden
-  }
-
-  async analyze(symbols) {
-    // Get raw prediction and confidence
-    const result = await this.performAnalysis(symbols);
-    
-    // Get calibrated confidence
-    const calibratedConfidence = modelManager.getCalibratedConfidence(
-      this.name,
-      result.confidence
-    );
-
-    // Update prediction tracking
-    modelManager.updatePrediction(
-      this.name,
-      result.prediction,
-      calibratedConfidence
-    );
-
-    return {
-      ...result,
-      confidence: calibratedConfidence,
-      metrics: modelManager.getModelMetrics(this.name)
-    };
-  }
-}
-
-// MarkovChain Analysis
+// Base Analysis Tool class
 class MarkovChain extends AnalysisTool {
   constructor() {
     super('Markov Chain');
@@ -958,8 +879,10 @@ const analysisTools = {
 };
 
 // Add models to hybrid ensemble
-Object.entries(analysisTools).forEach(([name, model]) => {
-  hybridModel.addModel(name, model);
+Object.values(analysisTools).forEach(tool => {
+  if (tool && typeof tool.analyze === 'function') {
+    hybridModel.addModel(tool.name, tool);
+  }
 });
 
 router.get('/', async (req, res) => {
