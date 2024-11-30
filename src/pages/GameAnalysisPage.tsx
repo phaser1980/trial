@@ -13,6 +13,7 @@ import {
   Tooltip
 } from '@mui/material';
 import UndoIcon from '@mui/icons-material/Undo';
+import InfoIcon from '@mui/icons-material/Info';
 import { v4 as uuidv4 } from 'uuid';
 
 interface SequenceItem {
@@ -22,23 +23,33 @@ interface SequenceItem {
 
 interface AnalysisData {
   markovChain?: {
-    matrix?: number[][]; 
+    matrix?: number[][];
     predictedNext?: number;
     confidence: number;
   };
   entropy?: {
-    value?: number; 
+    value?: number;
     predictedNext?: number;
     confidence: number;
   };
   chiSquare?: {
-    value?: number; 
+    value?: number;
     predictedNext?: number;
     confidence: number;
   };
   monteCarlo?: {
     predictedNext?: number;
     confidence: number;
+  };
+  arima?: {
+    predictedNext?: number;
+    confidence: number;
+    params?: {
+      ar: number[];
+      d: number;
+      ma: number[];
+    };
+    error?: string;
   };
 }
 
@@ -77,6 +88,16 @@ interface BackendAnalysis {
     monteCarlo: {
       prediction?: number;
       confidence: number;
+    };
+    arima: {
+      prediction?: number;
+      confidence: number;
+      params?: {
+        ar: number[];
+        d: number;
+        ma: number[];
+      };
+      error?: string;
     };
   };
 }
@@ -134,11 +155,12 @@ const transformAnalysisData = (backendData: BackendAnalysis | null): AnalysisDat
       markovChain: { confidence: 0.25 },
       entropy: { confidence: 0.25 },
       chiSquare: { confidence: 0.25 },
-      monteCarlo: { confidence: 0.25 }
+      monteCarlo: { confidence: 0.25 },
+      arima: { confidence: 0.25 }
     };
   }
 
-  const { markovChain, entropy, chiSquare, monteCarlo } = backendData.analyses;
+  const { markovChain, entropy, chiSquare, monteCarlo, arima } = backendData.analyses;
   
   return {
     markovChain: {
@@ -159,6 +181,12 @@ const transformAnalysisData = (backendData: BackendAnalysis | null): AnalysisDat
     monteCarlo: {
       predictedNext: monteCarlo.prediction,
       confidence: monteCarlo.confidence || 0.25
+    },
+    arima: {
+      predictedNext: arima.prediction,
+      confidence: arima.confidence || 0.25,
+      params: arima.params,
+      error: arima.error
     }
   };
 };
@@ -279,6 +307,14 @@ const GameAnalysisPage: React.FC = () => {
     return 'N/A';
   };
 
+  // Helper type for analysis data
+  type AnalysisType = 
+    | { type: 'markov'; matrix?: number[][]; predictedNext?: number; confidence: number; }
+    | { type: 'entropy'; value?: number; predictedNext?: number; confidence: number; }
+    | { type: 'chiSquare'; value?: number; predictedNext?: number; confidence: number; }
+    | { type: 'monteCarlo'; predictedNext?: number; confidence: number; }
+    | { type: 'arima'; predictedNext?: number; confidence: number; params?: { ar: number[]; d: number; ma: number[]; }; error?: string; };
+
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {error && (
@@ -367,37 +403,79 @@ const GameAnalysisPage: React.FC = () => {
             ) : (
               <Grid container spacing={2}>
                 {Object.entries({
-                  'Markov': analysisData.markovChain,
-                  'Entropy': analysisData.entropy,
-                  'Chi²': analysisData.chiSquare,
-                  'Monte Carlo': analysisData.monteCarlo
-                }).map(([name, data]) => (
+                  'Markov': { type: 'markov', ...analysisData.markovChain },
+                  'Entropy': { type: 'entropy', ...analysisData.entropy },
+                  'Chi²': { type: 'chiSquare', ...analysisData.chiSquare },
+                  'Monte Carlo': { type: 'monteCarlo', ...analysisData.monteCarlo },
+                  'ARIMA': { type: 'arima', ...analysisData.arima }
+                } as Record<string, AnalysisType>).map(([name, data]) => (
                   data && (
                     <Grid item xs={8} key={name}>
                       <Paper 
                         elevation={1} 
                         sx={{ 
-                          p: 1, 
-                          backgroundColor: 'background.default',
-                          height: '100%'
+                          p: 2, 
+                          height: '100%',
+                          backgroundColor: loading ? 'action.disabledBackground' : 
+                            name === 'ARIMA' ? 'rgba(25, 118, 210, 0.04)' : 'background.paper',
+                          border: name === 'ARIMA' ? '1px solid rgba(25, 118, 210, 0.25)' : 'none'
                         }}
                       >
-                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+                        <Typography variant="h6" component="h3" 
+                          sx={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 1,
+                            color: name === 'ARIMA' ? 'primary.main' : 'text.primary'
+                          }}
+                        >
                           {name}
+                          {data.type === 'arima' && data.error && (
+                            <Tooltip title={data.error}>
+                              <IconButton size="small" color="warning">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                         </Typography>
-                        <Typography variant="body2" sx={{ mt: 0.5 }}>
-                          {renderAnalysisValue(name, data)}
-                        </Typography>
-                        <Typography variant="body2">
+                        <Typography variant="body1">
                           Next: <strong>
-                            {typeof data.predictedNext === 'number' 
-                              ? symbols[data.predictedNext]
-                              : 'N/A'}
+                            {data.predictedNext !== undefined ? 
+                              symbols[data.predictedNext] : 
+                              'N/A'
+                            }
                           </strong>
                         </Typography>
                         <Typography variant="caption" display="block" color="text.secondary">
                           Conf: {data.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'N/A'}
                         </Typography>
+                        {data.type === 'arima' && data.params && (
+                          <>
+                            <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
+                              Model Parameters:
+                            </Typography>
+                            <Box sx={{ 
+                              mt: 0.5, 
+                              p: 1, 
+                              backgroundColor: 'background.paper',
+                              borderRadius: 1,
+                              fontSize: '0.875rem'
+                            }}>
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                                AR({data.params.ar.length}): [{data.params.ar.map(v => v.toFixed(2)).join(', ')}]
+                                <br />
+                                D: {data.params.d}
+                                <br />
+                                MA({data.params.ma.length}): [{data.params.ma.map(v => v.toFixed(2)).join(', ')}]
+                              </Typography>
+                            </Box>
+                            {data.error && (
+                              <Typography variant="caption" color="warning.main" sx={{ mt: 1, display: 'block' }}>
+                                {data.error}
+                              </Typography>
+                            )}
+                          </>
+                        )}
                       </Paper>
                     </Grid>
                   )
