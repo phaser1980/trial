@@ -113,40 +113,120 @@ const adjustConfidence = (baseConfidence, sequenceLength, threshold) => {
 
 // Threshold-based analysis wrapper
 const performThresholdAnalysis = (symbols) => {
-    const sequenceLength = symbols.length;
-    let analysis = {};
+    console.log(`[ThresholdAnalysis] Analyzing sequence of length ${symbols.length}`);
 
-    // Markov Chain Analysis (Threshold: 100 symbols)
-    if (sequenceLength >= 100) {
-        const markovResult = calculateMarkovChain(symbols);
-        const baseConfidence = markovResult.predictability;
-        analysis.markovChain = {
-            ...markovResult,
-            confidence: adjustConfidence(baseConfidence, sequenceLength, 100)
+    const results = {
+        markov: null,
+        runs: null,
+        autocorrelation: null,
+        debug: {
+            sequenceLength: symbols.length,
+            thresholdsMet: []
+        }
+    };
+
+    // Check sequence length requirements
+    if (symbols.length < 50) {
+        console.log('[ThresholdAnalysis] Sequence too short for any analysis');
+        return {
+            prediction: null,
+            confidence: 0,
+            debug: {
+                error: 'Insufficient data',
+                minimumRequired: 50,
+                current: symbols.length
+            }
         };
     }
 
-    // Runs Test Analysis (Threshold: 200 symbols)
-    if (sequenceLength >= 200) {
-        const runsResult = performRunsTest(symbols);
-        const baseConfidence = runsResult.isRandom ? 0.8 : 0.6;
-        analysis.runsTest = {
-            ...runsResult,
-            confidence: adjustConfidence(baseConfidence, sequenceLength, 200)
+    try {
+        // Markov Chain Analysis (100+ symbols)
+        if (symbols.length >= 100) {
+            console.log('[ThresholdAnalysis] Performing Markov Chain analysis');
+            results.markov = calculateMarkovChain(symbols);
+            results.debug.thresholdsMet.push('markov');
+        }
+
+        // Runs Test (200+ symbols)
+        if (symbols.length >= 200) {
+            console.log('[ThresholdAnalysis] Performing Runs Test analysis');
+            results.runs = performRunsTest(symbols);
+            results.debug.thresholdsMet.push('runs');
+        }
+
+        // Autocorrelation (300+ symbols)
+        if (symbols.length >= 300) {
+            console.log('[ThresholdAnalysis] Performing Autocorrelation analysis');
+            results.autocorrelation = calculateAutocorrelation(symbols);
+            results.debug.thresholdsMet.push('autocorrelation');
+        }
+
+        // Determine prediction and confidence
+        let prediction = null;
+        let confidence = 0;
+
+        console.log('[ThresholdAnalysis] Analysis results:', results);
+
+        // Use available analyses to make prediction
+        if (results.markov) {
+            const markovPrediction = results.markov.predictability;
+            confidence = Math.max(confidence, markovPrediction.confidence);
+            prediction = markovPrediction.symbol;
+            
+            console.log('[ThresholdAnalysis] Markov prediction:', {
+                symbol: prediction,
+                confidence: markovPrediction.confidence
+            });
+        }
+
+        if (results.runs && results.runs.isRandom === false) {
+            confidence = Math.max(confidence, 0.7); // Strong non-randomness detected
+            console.log('[ThresholdAnalysis] Non-random pattern detected in runs test');
+        }
+
+        if (results.autocorrelation && results.autocorrelation.hasPeriodicity) {
+            confidence = Math.max(confidence, results.autocorrelation.strength);
+            console.log('[ThresholdAnalysis] Periodicity detected:', {
+                strength: results.autocorrelation.strength
+            });
+        }
+
+        // Adjust confidence based on sequence length
+        const adjustedConfidence = confidence > 0 ? 
+            adjustConfidence(confidence, symbols.length, Math.max(...results.debug.thresholdsMet.map(t => 
+                t === 'markov' ? 100 : t === 'runs' ? 200 : 300
+            ))) : 0;
+
+        console.log('[ThresholdAnalysis] Final prediction:', {
+            symbol: prediction,
+            rawConfidence: confidence,
+            adjustedConfidence
+        });
+
+        return {
+            prediction,
+            confidence: adjustedConfidence,
+            debug: {
+                ...results.debug,
+                analyses: {
+                    markov: results.markov,
+                    runs: results.runs,
+                    autocorrelation: results.autocorrelation
+                }
+            }
+        };
+
+    } catch (error) {
+        console.error('[ThresholdAnalysis] Error during analysis:', error);
+        return {
+            prediction: null,
+            confidence: 0,
+            debug: {
+                error: error.message,
+                stack: error.stack
+            }
         };
     }
-
-    // Autocorrelation Analysis (Threshold: 300 symbols)
-    if (sequenceLength >= 300) {
-        const autoCorr = calculateAutocorrelation(symbols);
-        const baseConfidence = 0.7 + (autoCorr.strength * 0.3);
-        analysis.autocorrelation = {
-            ...autoCorr,
-            confidence: adjustConfidence(baseConfidence, sequenceLength, 300)
-        };
-    }
-
-    return analysis;
 };
 
 const AnalysisTool = require('./AnalysisTool');

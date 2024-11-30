@@ -23,8 +23,25 @@ class PredictionTracker {
 
     // Record a new prediction
     recordPrediction(modelName, prediction, confidence, actual) {
+        console.log(`[PredictionTracker] Recording prediction for ${modelName}:`, {
+            prediction,
+            confidence,
+            actual
+        });
+
         this.initializeModel(modelName);
         const history = this.modelHistory.get(modelName);
+
+        // Validate inputs
+        if (prediction === null || prediction === undefined) {
+            console.log(`[PredictionTracker] Skipping null/undefined prediction for ${modelName}`);
+            return;
+        }
+
+        if (confidence < 0 || confidence > 1) {
+            console.log(`[PredictionTracker] Invalid confidence value for ${modelName}: ${confidence}`);
+            confidence = Math.max(0, Math.min(1, confidence));
+        }
 
         // Add new prediction
         history.predictions.push(prediction);
@@ -38,8 +55,12 @@ class PredictionTracker {
             history.confidences.shift();
         }
 
-        // Update accuracy
-        this.updateAccuracy(modelName);
+        // Update accuracy and log results
+        const newAccuracy = this.updateAccuracy(modelName);
+        console.log(`[PredictionTracker] Updated ${modelName} accuracy:`, {
+            newAccuracy,
+            totalPredictions: history.predictions.length
+        });
         
         // Update calibration
         this.updateCalibration(modelName);
@@ -58,6 +79,7 @@ class PredictionTracker {
         if (history.accuracyOverTime.length > this.historyWindow) {
             history.accuracyOverTime.shift();
         }
+        return accuracy;
     }
 
     // Update confidence calibration
@@ -86,19 +108,37 @@ class PredictionTracker {
 
     // Get calibrated confidence for a model
     getCalibratedConfidence(modelName, rawConfidence) {
+        console.log(`[PredictionTracker] Calibrating confidence for ${modelName}:`, {
+            rawConfidence
+        });
+
         const history = this.modelHistory.get(modelName);
-        if (!history) return rawConfidence;
+        if (!history) {
+            console.log(`[PredictionTracker] No history for ${modelName}, using raw confidence`);
+            return rawConfidence;
+        }
 
         // Apply calibration factor
         let calibratedConfidence = rawConfidence * history.calibrationFactor;
 
         // If accuracy is consistently low, reduce confidence more aggressively
         const recentAccuracy = history.accuracyOverTime.slice(-5).reduce((sum, acc) => sum + acc, 0) / 5;
+        
+        console.log(`[PredictionTracker] Calibration metrics for ${modelName}:`, {
+            calibrationFactor: history.calibrationFactor,
+            recentAccuracy,
+            accuracyThreshold: this.accuracyThreshold
+        });
+
         if (recentAccuracy < this.accuracyThreshold) {
             calibratedConfidence *= (recentAccuracy / this.accuracyThreshold);
+            console.log(`[PredictionTracker] Applying accuracy penalty for ${modelName}`);
         }
 
-        return Math.min(0.95, Math.max(0.05, calibratedConfidence));
+        const finalConfidence = Math.min(0.95, Math.max(0.05, calibratedConfidence));
+        console.log(`[PredictionTracker] Final calibrated confidence for ${modelName}:`, finalConfidence);
+
+        return finalConfidence;
     }
 
     // Get model performance metrics

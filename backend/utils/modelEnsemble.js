@@ -45,33 +45,58 @@ class ModelEnsemble {
         const predictions = new Map();
         this.debugLog = [];
         let validPredictions = 0;
+        let totalModels = this.models.size;
+
+        console.log(`[ModelEnsemble] Getting predictions for sequence of length ${sequence.length}`);
+        console.log(`[ModelEnsemble] Active models: ${Array.from(this.models.keys()).join(', ')}`);
 
         for (const [modelName, model] of this.models.entries()) {
             try {
+                console.log(`[ModelEnsemble] Requesting prediction from ${modelName}`);
                 const result = await model.analyze(sequence);
+                
+                if (!result) {
+                    console.log(`[ModelEnsemble] ${modelName} returned null result`);
+                    continue;
+                }
+
+                console.log(`[ModelEnsemble] ${modelName} prediction:`, {
+                    prediction: result.prediction,
+                    confidence: result.confidence,
+                    debug: result.debug
+                });
+
                 if (result && result.prediction && result.confidence > 0) {
                     validPredictions++;
-                    const weight = this.weights.get(modelName);
+                    const weight = this.weights.get(modelName) || 1.0;
                     predictions.set(modelName, {
                         symbol: result.prediction,
                         confidence: result.confidence,
-                        weight: weight || 1.0,
+                        weight: weight,
                         debug: result.debug || {}
                     });
                     this.debugLog.push(
                         `${modelName}: ${result.prediction} (conf: ${result.confidence?.toFixed(3)}, weight: ${weight?.toFixed(3)})`
                     );
                 } else {
+                    console.log(`[ModelEnsemble] Invalid prediction from ${modelName}:`, result);
                     this.debugLog.push(`${modelName}: No valid prediction`);
                 }
             } catch (error) {
-                console.error(`Error in ${modelName}:`, error);
+                console.error(`[ModelEnsemble] Error in ${modelName}:`, error);
                 this.debugLog.push(`${modelName} error: ${error.message}`);
             }
         }
 
+        console.log(`[ModelEnsemble] Prediction summary:`, {
+            totalModels,
+            validPredictions,
+            minRequired: this.minModelPredictions
+        });
+
         // Check if we have enough valid predictions
         if (validPredictions < this.minModelPredictions) {
+            console.log(`[ModelEnsemble] Insufficient valid predictions: ${validPredictions} < ${this.minModelPredictions}`);
             this.debugLog.push(`Insufficient valid predictions: ${validPredictions} < ${this.minModelPredictions}`);
             return new Map();
         }
@@ -79,60 +104,65 @@ class ModelEnsemble {
         return predictions;
     }
 
-    // Combine predictions using weighted voting with confidence thresholds
+    // Combine weighted predictions with enhanced logging
     combineWeightedPredictions(predictions) {
-        const votes = new Map();
+        console.log(`[ModelEnsemble] Combining ${predictions.size} predictions`);
+        
+        const combinedPredictions = new Map();
         let totalWeight = 0;
-        let maxConfidence = 0;
 
-        // Collect weighted votes
+        // First pass: calculate weights and collect predictions
         for (const [modelName, pred] of predictions.entries()) {
-            if (pred.confidence < this.minConfidence) {
-                this.debugLog.push(`Skipping ${modelName} due to low confidence: ${pred.confidence}`);
-                continue;
-            }
-
             const weight = pred.weight * pred.confidence;
             totalWeight += weight;
-            maxConfidence = Math.max(maxConfidence, pred.confidence);
 
-            if (!votes.has(pred.symbol)) {
-                votes.set(pred.symbol, { weight: 0, models: [] });
+            console.log(`[ModelEnsemble] Processing ${modelName}:`, {
+                symbol: pred.symbol,
+                confidence: pred.confidence,
+                weight: pred.weight,
+                effectiveWeight: weight
+            });
+
+            if (!combinedPredictions.has(pred.symbol)) {
+                combinedPredictions.set(pred.symbol, 0);
             }
-            const vote = votes.get(pred.symbol);
-            vote.weight += weight;
-            vote.models.push(modelName);
+            combinedPredictions.set(
+                pred.symbol,
+                combinedPredictions.get(pred.symbol) + weight
+            );
         }
 
-        if (totalWeight === 0) {
-            this.debugLog.push('No predictions met confidence threshold');
-            return { symbol: null, confidence: 0 };
-        }
+        // Second pass: find best prediction
+        let bestPrediction = null;
+        let maxWeight = 0;
+        let confidence = 0;
 
-        // Find symbol with highest weighted votes
-        let bestSymbol = null;
-        let maxVotes = 0;
-        let consensusModels = [];
+        console.log(`[ModelEnsemble] Total weight: ${totalWeight}`);
+        
+        combinedPredictions.forEach((weight, symbol) => {
+            const normalizedWeight = totalWeight > 0 ? weight / totalWeight : 0;
+            console.log(`[ModelEnsemble] Symbol ${symbol}:`, {
+                rawWeight: weight,
+                normalizedWeight
+            });
 
-        for (const [symbol, vote] of votes.entries()) {
-            if (vote.weight > maxVotes) {
-                maxVotes = vote.weight;
-                bestSymbol = symbol;
-                consensusModels = vote.models;
+            if (normalizedWeight > maxWeight) {
+                maxWeight = normalizedWeight;
+                bestPrediction = symbol;
+                confidence = Math.min(0.95, normalizedWeight);
             }
-        }
+        });
 
-        // Calculate ensemble confidence
-        const voteRatio = maxVotes / totalWeight;
-        const modelConsensus = consensusModels.length / predictions.size;
-        const confidence = Math.min(0.95, voteRatio * modelConsensus * maxConfidence);
-        
-        this.debugLog.push(
-            `Combined prediction: ${bestSymbol} (conf: ${confidence.toFixed(3)}, ` +
-            `consensus: ${(modelConsensus * 100).toFixed(1)}%, models: ${consensusModels.join(', ')})`
-        );
-        
-        return { symbol: bestSymbol, confidence };
+        console.log(`[ModelEnsemble] Final prediction:`, {
+            symbol: bestPrediction,
+            confidence,
+            totalPredictions: predictions.size
+        });
+
+        return {
+            symbol: bestPrediction,
+            confidence: confidence
+        };
     }
 
     // Make ensemble prediction
