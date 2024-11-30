@@ -64,10 +64,14 @@ class ARIMAAnalysis {
             const X = tf.tensor2d(arMatrix);
             const Y = tf.tensor1d(y);
 
-            // Fit AR model using normal equations
-            const XtX = X.transpose().matMul(X);
-            const XtY = X.transpose().matMul(Y.expandDims(1));
-            const coefficients = XtX.solve(XtY).squeeze();
+            // Fit AR model using pseudoinverse for better numerical stability
+            const Xt = X.transpose();
+            const XtX = Xt.matMul(X);
+            const XtY = Xt.matMul(Y.expandDims(1));
+            
+            // Use pseudoinverse instead of solve
+            const XtXInv = tf.tensor2d(this.pseudoInverse(XtX.arraySync()));
+            const coefficients = tf.tensor2d(XtXInv).matMul(XtY).squeeze();
 
             // Calculate residuals
             const predicted = X.matMul(coefficients.expandDims(1)).squeeze();
@@ -89,6 +93,77 @@ class ARIMAAnalysis {
             this.debugLog.push(`Error in model fitting: ${error.message}`);
             throw error;
         }
+    }
+
+    // Helper method for matrix pseudoinverse
+    pseudoInverse(matrix) {
+        const svd = this.singularValueDecomposition(matrix);
+        const threshold = 1e-10;
+        const s = svd.s.map(val => (Math.abs(val) < threshold ? 0 : 1 / val));
+        
+        const n = matrix[0].length;
+        const Vt = this.transpose(svd.V);
+        const U = svd.U;
+        
+        // Compute pseudoinverse
+        const result = Array(n).fill().map(() => Array(n).fill(0));
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                for (let k = 0; k < n; k++) {
+                    result[i][j] += Vt[i][k] * s[k] * U[j][k];
+                }
+            }
+        }
+        return result;
+    }
+
+    // Singular Value Decomposition implementation
+    singularValueDecomposition(A) {
+        const n = A.length;
+        let U = Array(n).fill().map(() => Array(n).fill(0));
+        let V = Array(n).fill().map(() => Array(n).fill(0));
+        let s = Array(n).fill(0);
+
+        // Simple SVD implementation for 2x2 matrices (sufficient for AR(2) model)
+        if (n === 2) {
+            const a = A[0][0], b = A[0][1], c = A[1][0], d = A[1][1];
+            const theta = 0.5 * Math.atan2(2 * (a * c + b * d), a * a + b * b - c * c - d * d);
+            const cost = Math.cos(theta), sint = Math.sin(theta);
+            
+            U = [[cost, -sint], [sint, cost]];
+            V = [[cost, -sint], [sint, cost]];
+            
+            const B = this.matrixMultiply(this.matrixMultiply(this.transpose(U), A), V);
+            s = [B[0][0], B[1][1]];
+        } else {
+            // For larger matrices, use a simpler approximation
+            for (let i = 0; i < n; i++) {
+                s[i] = Math.sqrt(A[i].reduce((sum, val) => sum + val * val, 0));
+                U[i][i] = 1;
+                V[i][i] = 1;
+            }
+        }
+
+        return { U, s, V };
+    }
+
+    // Helper method for matrix multiplication
+    matrixMultiply(A, B) {
+        const n = A.length;
+        const result = Array(n).fill().map(() => Array(n).fill(0));
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                for (let k = 0; k < n; k++) {
+                    result[i][j] += A[i][k] * B[k][j];
+                }
+            }
+        }
+        return result;
+    }
+
+    // Helper method for matrix transpose
+    transpose(matrix) {
+        return matrix[0].map((_, i) => matrix.map(row => row[i]));
     }
 
     // Make prediction

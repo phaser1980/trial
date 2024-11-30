@@ -285,6 +285,9 @@ class AnalysisTool {
     this.recentData = [];
     this.lastPrediction = null;
     this.predictionHistory = [];
+    this.accuracy = 0;
+    this.predictionCount = 0;
+    this.correctPredictions = 0;
   }
 
   getModelState() {
@@ -310,6 +313,18 @@ class AnalysisTool {
         this.predictionHistory = this.predictionHistory.slice(-50);
       }
     }
+  }
+
+  updateAccuracy(wasCorrect) {
+    this.predictionCount++;
+    if (wasCorrect) {
+      this.correctPredictions++;
+    }
+    this.accuracy = this.correctPredictions / this.predictionCount;
+  }
+
+  getAccuracy() {
+    return this.accuracy;
   }
 
   getModelWeight() {

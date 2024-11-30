@@ -44,16 +44,16 @@ class ModelEnsemble {
 
         for (const [modelName, model] of this.models.entries()) {
             try {
-                const prediction = await model.analyze(sequence);
-                if (prediction && prediction.prediction) {
+                const result = await model.analyze(sequence);
+                if (result && result.prediction) {
                     const weight = this.weights.get(modelName);
                     predictions.set(modelName, {
-                        symbol: prediction.prediction,
-                        confidence: prediction.confidence,
-                        weight
+                        symbol: result.prediction,
+                        confidence: result.confidence || 0.5,
+                        weight: weight || 1.0
                     });
                     this.debugLog.push(
-                        `${modelName}: ${prediction.prediction} (conf: ${prediction.confidence.toFixed(3)}, weight: ${weight.toFixed(3)})`
+                        `${modelName}: ${result.prediction} (conf: ${result.confidence?.toFixed(3) || 'N/A'}, weight: ${weight?.toFixed(3) || 'N/A'})`
                     );
                 }
             } catch (error) {
@@ -71,8 +71,8 @@ class ModelEnsemble {
         let totalWeight = 0;
 
         // Collect weighted votes
-        for (const [modelName, pred] of predictions.entries()) {
-            const weight = this.weights.get(modelName) * pred.confidence;
+        for (const [_, pred] of predictions.entries()) {
+            const weight = (pred.weight || 1.0) * (pred.confidence || 0.5);
             totalWeight += weight;
 
             if (!votes.has(pred.symbol)) {
@@ -93,7 +93,7 @@ class ModelEnsemble {
 
         // Calculate confidence based on vote distribution
         const confidence = totalWeight > 0 ? maxVotes / totalWeight : 0;
-
+        
         this.debugLog.push(`Combined prediction: ${bestSymbol} (conf: ${confidence.toFixed(3)})`);
         return { symbol: bestSymbol, confidence };
     }
