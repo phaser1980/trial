@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const tf = require('@tensorflow/tfjs');
+const PredictionTracker = require('../utils/predictionTracker');
+
+// Initialize prediction tracker
+const predictionTracker = new PredictionTracker();
 
 // ModelManager Class for handling model weights and performance
 class ModelManager {
@@ -59,6 +63,7 @@ class ModelManager {
     this.learningRate = 0.1;   // Rate at which weights are adjusted
     this.minWeight = 0.2;      // Minimum weight for any model
     this.confidenceWeight = 0.3; // Weight given to confidence scores
+    this.lastActual = null; // Store last actual symbol for feedback
   }
 
   // Map display name to internal name
@@ -232,6 +237,36 @@ class ModelManager {
     // If no model is performing well and we have enough data, suggest retraining
     return Object.keys(recentMetrics).length >= 3 && !hasGoodPerformer;
   }
+
+  // Update prediction tracking
+  updatePrediction(modelName, prediction, confidence) {
+    if (this.lastActual !== null) {
+      predictionTracker.recordPrediction(
+        this.mapModelName(modelName),
+        prediction,
+        confidence,
+        this.lastActual
+      );
+    }
+  }
+
+  // Set actual symbol for feedback
+  setActualSymbol(symbol) {
+    this.lastActual = symbol;
+  }
+
+  // Get calibrated confidence
+  getCalibratedConfidence(modelName, rawConfidence) {
+    return predictionTracker.getCalibratedConfidence(
+      this.mapModelName(modelName),
+      rawConfidence
+    );
+  }
+
+  // Get model performance metrics
+  getModelMetrics(modelName) {
+    return predictionTracker.getModelMetrics(this.mapModelName(modelName));
+  }
 }
 
 // Initialize model manager
@@ -275,6 +310,30 @@ class AnalysisTool {
 
   getModelWeight() {
     return 1.0; // Base weight, can be overridden
+  }
+
+  async analyze(symbols) {
+    // Get raw prediction and confidence
+    const result = await this.performAnalysis(symbols);
+    
+    // Get calibrated confidence
+    const calibratedConfidence = modelManager.getCalibratedConfidence(
+      this.name,
+      result.confidence
+    );
+
+    // Update prediction tracking
+    modelManager.updatePrediction(
+      this.name,
+      result.prediction,
+      calibratedConfidence
+    );
+
+    return {
+      ...result,
+      confidence: calibratedConfidence,
+      metrics: modelManager.getModelMetrics(this.name)
+    };
   }
 }
 
@@ -861,7 +920,7 @@ router.get('/', async (req, res) => {
     const analyses = {};
     for (const [name, tool] of Object.entries(analysisTools)) {
       try {
-        analyses[name] = tool.analyze(symbols);
+        analyses[name] = await tool.analyze(symbols);
         // Update accuracy if we have new data
         if (tool.lastPrediction !== null) {
           tool.updateAccuracy(tool.lastPrediction, symbols[symbols.length - 1]);
