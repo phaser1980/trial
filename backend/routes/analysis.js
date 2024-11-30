@@ -4,6 +4,7 @@ const pool = require('../db');
 const tf = require('@tensorflow/tfjs');
 const PredictionTracker = require('../utils/predictionTracker');
 const { HybridModel, ErrorCorrection } = require('../utils/hybridModel');
+const ARIMAAnalysis = require('../utils/arimaAnalysis');
 
 // Initialize prediction tracker and hybrid model
 const predictionTracker = new PredictionTracker();
@@ -56,6 +57,7 @@ class ModelManager {
       markovChain: [],
       entropy: [],
       chiSquare: [],
+      monteCarlo: [],
       monteCarlo: [],
       arima: [],
       lstm: [],
@@ -454,6 +456,7 @@ class MonteCarloAnalysis extends AnalysisTool {
     this.iterations = 1000; 
     this.confidenceLevel = 0.95;
     this.lastState = null;
+    this.debugLog = [];
   }
 
   calculateFrequencies(symbols) {
@@ -487,38 +490,50 @@ class MonteCarloAnalysis extends AnalysisTool {
   }
 
   analyze(symbols) {
+    this.debugLog = []; // Reset debug log
+    this.debugLog.push(`Starting Monte Carlo analysis with ${symbols.length} symbols`);
+
     if (symbols.length < this.minSamples) {
-      return { prediction: null, confidence: 0, message: 'Insufficient data' };
+      this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
+      return { prediction: null, confidence: 0, message: 'Insufficient data', debug: this.debugLog };
     }
 
     try {
       // Calculate symbol frequencies
       const frequencies = this.calculateFrequencies(symbols);
+      this.debugLog.push(`Frequencies calculated: ${JSON.stringify(frequencies)}`);
       
       // Run simulations
       const predictions = [];
       for (let i = 0; i < this.iterations; i++) {
         predictions.push(this.simulateNext(frequencies));
       }
+      this.debugLog.push(`Completed ${this.iterations} simulations`);
 
       // Get most likely outcome
       const { prediction, probability } = this.getMostLikelyOutcome(predictions);
+      this.debugLog.push(`Most likely outcome: ${prediction} with probability ${probability}`);
       
-      // Calculate confidence based on simulation consistency
+      // Calculate confidence
       const confidence = this.calculateConfidence(predictions, prediction);
+      this.debugLog.push(`Calculated confidence: ${confidence}`);
       
-      // Store state for next analysis
-      this.lastState = { frequencies, lastSymbol: symbols[symbols.length - 1] };
-
       return {
         prediction,
         confidence: Math.min(0.95, confidence),
         probability,
+        debug: this.debugLog,
         message: `Monte Carlo prediction based on ${this.iterations} simulations`
       };
     } catch (error) {
-      console.error('[Monte Carlo] Analysis error:', error);
-      return { prediction: null, confidence: 0, error: error.message };
+      this.debugLog.push(`Error in analysis: ${error.message}`);
+      console.error('[Monte Carlo] Analysis error:', error, this.debugLog);
+      return { 
+        prediction: null, 
+        confidence: 0.25, 
+        error: error.message,
+        debug: this.debugLog 
+      };
     }
   }
 }
@@ -535,6 +550,7 @@ class LSTMAnalysis extends AnalysisTool {
     this.initialized = false;
     this.lastPrediction = null;
     this.modelState = null;
+    this.debugLog = [];
     this.tf = require('@tensorflow/tfjs');
 
     this.symbolMap = {
@@ -659,26 +675,44 @@ class LSTMAnalysis extends AnalysisTool {
   }
 
   async analyze(symbols) {
+    this.debugLog = [];
+    this.debugLog.push(`Starting LSTM analysis with ${symbols.length} symbols`);
+
     if (symbols.length < this.minTrainingSize) {
-      return { prediction: null, confidence: 0, message: 'Insufficient data' };
+      this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minTrainingSize}`);
+      return { prediction: null, confidence: 0, message: 'Insufficient data', debug: this.debugLog };
     }
 
-    if (!this.initialized) {
-      await this.initializeModel();
+    try {
+      if (!this.initialized) {
+        this.debugLog.push('Initializing LSTM model');
+        await this.initializeModel();
+        this.initialized = true;
+      }
+
+      // Improve confidence calculation based on sequence length
+      const baseConfidence = 0.6;
+      const sequenceWeight = Math.min(1, (symbols.length - this.minTrainingSize) / 300);
+      const adjustedConfidence = Math.min(0.95, baseConfidence * (1 + sequenceWeight));
+
+      const prediction = await this.predict(symbols);
+      return {
+        prediction: prediction.index,
+        confidence: adjustedConfidence,
+        probabilities: prediction.probabilities,
+        debug: this.debugLog,
+        isTraining: this.isTraining
+      };
+    } catch (error) {
+      this.debugLog.push(`Error in analysis: ${error.message}`);
+      console.error('[LSTM] Analysis error:', error, this.debugLog);
+      return { 
+        prediction: null, 
+        confidence: 0, 
+        error: error.message,
+        debug: this.debugLog 
+      };
     }
-
-    // Improve confidence calculation based on sequence length
-    const baseConfidence = 0.6;
-    const sequenceWeight = Math.min(1, (symbols.length - this.minTrainingSize) / 300);
-    const adjustedConfidence = Math.min(0.95, baseConfidence * (1 + sequenceWeight));
-
-    const prediction = await this.predict(symbols);
-    return {
-      prediction: prediction.index,
-      confidence: adjustedConfidence,
-      probabilities: prediction.probabilities,
-      isTraining: this.isTraining
-    };
   }
 }
 
@@ -903,6 +937,7 @@ const analysisTools = {
   entropy: new EntropyAnalysis(),
   chiSquare: new ChiSquareTest(),
   monteCarlo: new MonteCarloAnalysis(),
+  arima: new ARIMAAnalysis(),
   lstm: new LSTMAnalysis(),
   hmm: new HMMAnalysis()
 };
@@ -917,6 +952,7 @@ router.get('/', async (req, res) => {
     // Fetch symbols from the database
     const result = await pool.query('SELECT symbol FROM sequences ORDER BY created_at ASC');
     const symbols = result.rows.map(row => row.symbol);
+    console.log(`Analyzing ${symbols.length} symbols`);
 
     if (symbols.length < 2) {
       return res.json({
@@ -928,9 +964,26 @@ router.get('/', async (req, res) => {
 
     // Get individual model predictions
     const analyses = {};
+    const debugInfo = {};
+
     for (const [name, tool] of Object.entries(analysisTools)) {
       try {
-        analyses[name] = await tool.analyze(symbols);
+        console.log(`Running ${name} analysis...`);
+        const startTime = Date.now();
+        
+        const result = await tool.analyze(symbols);
+        const endTime = Date.now();
+        
+        analyses[name] = result;
+        debugInfo[name] = {
+          executionTime: endTime - startTime,
+          debug: result.debug || [],
+          error: result.error,
+          symbolCount: symbols.length,
+          modelState: tool.modelState || null
+        };
+        
+        console.log(`${name} analysis completed in ${endTime - startTime}ms`);
         
         // Update accuracy tracking
         if (tool.lastPrediction !== null) {
@@ -949,13 +1002,18 @@ router.get('/', async (req, res) => {
           confidence: 0,
           error: error.message
         };
+        debugInfo[name] = {
+          error: error.message,
+          stack: error.stack,
+          symbolCount: symbols.length
+        };
       }
     }
 
     // Get hybrid model prediction
     const hybridPrediction = await hybridModel.getPrediction(symbols);
 
-    // Send back results
+    // Send back results with debug info
     const response = {
       symbols: symbols.length,
       tools: Object.keys(analyses),
@@ -967,14 +1025,19 @@ router.get('/', async (req, res) => {
           modelWeights: hybridPrediction.weights,
           individualPredictions: hybridPrediction.modelPredictions
         }
-      }
+      },
+      debug: debugInfo
     };
 
     res.json(response);
 
   } catch (error) {
     console.error('Analysis error:', error);
-    res.status(500).json({ error: 'Analysis failed' });
+    res.status(500).json({ 
+      error: 'Analysis failed',
+      details: error.message,
+      stack: error.stack
+    });
   }
 });
 
