@@ -58,11 +58,26 @@ interface ErrorState {
 interface BackendAnalysis {
   symbols: number;
   tools: string[];
-  sampleAnalysis: {
-    matrix: { [key: string]: { [key: string]: number } };
-    prediction?: number;
-    confidence: number;
-    accuracy: number;
+  analyses: {
+    markovChain: {
+      matrix: { [key: string]: { [key: string]: number } };
+      prediction?: number;
+      confidence: number;
+    };
+    entropy: {
+      entropy: number;
+      prediction?: number;
+      confidence: number;
+    };
+    chiSquare: {
+      chiSquare: number;
+      prediction?: number;
+      confidence: number;
+    };
+    monteCarlo: {
+      prediction?: number;
+      confidence: number;
+    };
   };
 }
 
@@ -114,7 +129,7 @@ const transformMatrix = (matrixRecord: { [key: string]: { [key: string]: number 
 
 // Analysis data transformer
 const transformAnalysisData = (backendData: BackendAnalysis | null): AnalysisData => {
-  if (!backendData?.sampleAnalysis) {
+  if (!backendData?.analyses) {
     return {
       markovChain: { confidence: 0.25 },
       entropy: { confidence: 0.25 },
@@ -123,27 +138,27 @@ const transformAnalysisData = (backendData: BackendAnalysis | null): AnalysisDat
     };
   }
 
-  const { prediction, confidence, matrix } = backendData.sampleAnalysis;
+  const { markovChain, entropy, chiSquare, monteCarlo } = backendData.analyses;
   
   return {
     markovChain: {
-      matrix: transformMatrix(matrix),
-      predictedNext: prediction,
-      confidence: confidence || 0.25
+      matrix: transformMatrix(markovChain.matrix),
+      predictedNext: markovChain.prediction,
+      confidence: markovChain.confidence || 0.25
     },
     entropy: {
-      predictedNext: prediction,
-      confidence: confidence || 0.25,
-      value: confidence
+      value: entropy.entropy,
+      predictedNext: entropy.prediction,
+      confidence: entropy.confidence || 0.25
     },
     chiSquare: {
-      predictedNext: prediction,
-      confidence: confidence || 0.25,
-      value: confidence
+      value: chiSquare.chiSquare,
+      predictedNext: chiSquare.prediction,
+      confidence: chiSquare.confidence || 0.25
     },
     monteCarlo: {
-      predictedNext: prediction,
-      confidence: confidence || 0.25
+      predictedNext: monteCarlo.prediction,
+      confidence: monteCarlo.confidence || 0.25
     }
   };
 };

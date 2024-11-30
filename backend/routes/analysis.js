@@ -259,7 +259,7 @@ router.get('/', async (req, res) => {
     const response = {
       symbols: symbols.length,
       tools: Object.keys(analyses),
-      sampleAnalysis: analyses.markovChain
+      analyses: analyses
     };
     
     console.log('Analysis results:', response);
