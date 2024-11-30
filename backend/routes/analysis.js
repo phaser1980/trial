@@ -3,9 +3,11 @@ const router = express.Router();
 const pool = require('../db');
 const tf = require('@tensorflow/tfjs');
 const PredictionTracker = require('../utils/predictionTracker');
+const { HybridModel, ErrorCorrection } = require('../utils/hybridModel');
 
-// Initialize prediction tracker
+// Initialize prediction tracker and hybrid model
 const predictionTracker = new PredictionTracker();
+const hybridModel = new HybridModel();
 
 // ModelManager Class for handling model weights and performance
 class ModelManager {
@@ -448,9 +450,10 @@ class EntropyAnalysis extends AnalysisTool {
 class MonteCarloAnalysis extends AnalysisTool {
   constructor() {
     super('Monte Carlo Analysis');
-    this.minSamples = 100;
-    this.iterations = 2000;
+    this.minSamples = 50; 
+    this.iterations = 1000; 
     this.confidenceLevel = 0.95;
+    this.lastState = null;
   }
 
   calculateFrequencies(symbols) {
@@ -484,37 +487,38 @@ class MonteCarloAnalysis extends AnalysisTool {
   }
 
   analyze(symbols) {
-    if (!symbols || symbols.length < this.minSamples) {
-      return {
-        prediction: null,
-        confidence: 0,
-        message: `Need at least ${this.minSamples} symbols for Monte Carlo analysis`
-      };
+    if (symbols.length < this.minSamples) {
+      return { prediction: null, confidence: 0, message: 'Insufficient data' };
     }
 
     try {
-      const recentSymbols = symbols.slice(-this.minSamples);
-      const frequencies = this.calculateFrequencies(recentSymbols);
-      const predictions = new Array(this.iterations)
-        .fill(0)
-        .map(() => this.simulateNext(frequencies));
+      // Calculate symbol frequencies
+      const frequencies = this.calculateFrequencies(symbols);
+      
+      // Run simulations
+      const predictions = [];
+      for (let i = 0; i < this.iterations; i++) {
+        predictions.push(this.simulateNext(frequencies));
+      }
 
-      const prediction = this.getMostLikelyOutcome(predictions);
-      const confidence = Math.min(0.95, this.calculateConfidence(predictions, prediction));
+      // Get most likely outcome
+      const { prediction, probability } = this.getMostLikelyOutcome(predictions);
+      
+      // Calculate confidence based on simulation consistency
+      const confidence = this.calculateConfidence(predictions, prediction);
+      
+      // Store state for next analysis
+      this.lastState = { frequencies, lastSymbol: symbols[symbols.length - 1] };
 
-      this.lastPrediction = prediction;
-      return { 
-        prediction, 
-        confidence,
-        message: `Based on ${this.iterations} simulations`
+      return {
+        prediction,
+        confidence: Math.min(0.95, confidence),
+        probability,
+        message: `Monte Carlo prediction based on ${this.iterations} simulations`
       };
     } catch (error) {
       console.error('[Monte Carlo] Analysis error:', error);
-      return {
-        prediction: null,
-        confidence: 0,
-        message: 'Error in Monte Carlo analysis'
-      };
+      return { prediction: null, confidence: 0, error: error.message };
     }
   }
 }
@@ -523,12 +527,14 @@ class MonteCarloAnalysis extends AnalysisTool {
 class LSTMAnalysis extends AnalysisTool {
   constructor() {
     super('LSTM Analysis');
-    this.sequenceLength = 15;
+    this.sequenceLength = 10; 
     this.model = null;
     this.isTraining = false;
-    this.minTrainingSize = 200; 
+    this.minTrainingSize = 100; 
     this.outputSize = 4;
     this.initialized = false;
+    this.lastPrediction = null;
+    this.modelState = null;
     this.tf = require('@tensorflow/tfjs');
 
     this.symbolMap = {
@@ -654,7 +660,7 @@ class LSTMAnalysis extends AnalysisTool {
 
   async analyze(symbols) {
     if (symbols.length < this.minTrainingSize) {
-      return { confidence: 0, prediction: null, isTraining: false };
+      return { prediction: null, confidence: 0, message: 'Insufficient data' };
     }
 
     if (!this.initialized) {
@@ -901,52 +907,90 @@ const analysisTools = {
   hmm: new HMMAnalysis()
 };
 
+// Add models to hybrid ensemble
+Object.entries(analysisTools).forEach(([name, model]) => {
+  hybridModel.addModel(name, model);
+});
+
 router.get('/', async (req, res) => {
   try {
     // Fetch symbols from the database
     const result = await pool.query('SELECT symbol FROM sequences ORDER BY created_at ASC');
     const symbols = result.rows.map(row => row.symbol);
 
-    // If there are fewer than 2 symbols, return an early response
     if (symbols.length < 2) {
       return res.json({
         message: 'Need at least 2 symbols for analysis',
         symbols: symbols,
-        analyses: {} 
+        analyses: {}
       });
     }
 
-    // Run all analyses if there are enough symbols
+    // Get individual model predictions
     const analyses = {};
     for (const [name, tool] of Object.entries(analysisTools)) {
       try {
         analyses[name] = await tool.analyze(symbols);
-        // Update accuracy if we have new data
+        
+        // Update accuracy tracking
         if (tool.lastPrediction !== null) {
           tool.updateAccuracy(tool.lastPrediction, symbols[symbols.length - 1]);
+          predictionTracker.recordPrediction(
+            name,
+            tool.lastPrediction,
+            analyses[name].confidence,
+            symbols[symbols.length - 1]
+          );
         }
       } catch (error) {
         console.error(`Error in ${name} analysis:`, error);
         analyses[name] = {
-          prediction: undefined,
-          confidence: 0.25,
+          prediction: null,
+          confidence: 0,
           error: error.message
         };
       }
     }
 
-    // Send back the symbols and analysis results
+    // Get hybrid model prediction
+    const hybridPrediction = await hybridModel.getPrediction(symbols);
+
+    // Send back results
     const response = {
       symbols: symbols.length,
       tools: Object.keys(analyses),
-      analyses: analyses
+      analyses: {
+        ...analyses,
+        hybrid: {
+          prediction: hybridPrediction.prediction,
+          confidence: hybridPrediction.confidence,
+          modelWeights: hybridPrediction.weights,
+          individualPredictions: hybridPrediction.modelPredictions
+        }
+      }
     };
-    
+
     res.json(response);
-    
+
   } catch (error) {
     console.error('Analysis error:', error);
     res.status(500).json({ error: 'Analysis failed' });
+  }
+});
+
+// Update models with actual result
+router.post('/feedback', async (req, res) => {
+  try {
+    const { actual } = req.body;
+    if (actual !== undefined) {
+      hybridModel.updateModels(actual);
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ error: 'Missing actual value' });
+    }
+  } catch (error) {
+    console.error('Feedback error:', error);
+    res.status(500).json({ error: 'Failed to process feedback' });
   }
 });
 
