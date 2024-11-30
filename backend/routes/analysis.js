@@ -5,13 +5,26 @@ const pool = require('../db');
 // ModelManager Class for handling model weights and performance
 class ModelManager {
   constructor() {
-    // Model name mapping
+    // Model name mapping (using exact keys that match the analysisTools object)
     this.modelNameMap = {
       'markov chain': 'markovChain',
       'entropy analysis': 'entropy',
       'chi-square test': 'chiSquare',
       'monte carlo simulation': 'monteCarlo',
-      'arima analysis': 'arima'
+      'arima analysis': 'arima',
+      'lstm analysis': 'lstm',
+      'hmm analysis': 'hmm'
+    };
+
+    // Reverse mapping for tool names to display names
+    this.displayNames = {
+      markovChain: 'Markov Chain',
+      entropy: 'Entropy Analysis',
+      chiSquare: 'Chi-Square Test',
+      monteCarlo: 'Monte Carlo Simulation',
+      arima: 'ARIMA Analysis',
+      lstm: 'LSTM Analysis',
+      hmm: 'HMM Analysis'
     };
 
     this.modelWeights = {
@@ -19,21 +32,27 @@ class ModelManager {
       entropy: 1.0,
       chiSquare: 1.0,
       monteCarlo: 1.0,
-      arima: 1.0
+      arima: 1.0,
+      lstm: 1.0,
+      hmm: 1.0
     };
     this.recentAccuracy = {
       markovChain: [],
       entropy: [],
       chiSquare: [],
       monteCarlo: [],
-      arima: []
+      arima: [],
+      lstm: [],
+      hmm: []
     };
     this.confidenceScores = {
       markovChain: [],
       entropy: [],
       chiSquare: [],
       monteCarlo: [],
-      arima: []
+      arima: [],
+      lstm: [],
+      hmm: []
     };
     this.windowSize = 20;      // Number of recent predictions to consider
     this.learningRate = 0.1;   // Rate at which weights are adjusted
@@ -43,8 +62,29 @@ class ModelManager {
 
   // Map display name to internal name
   mapModelName(displayName) {
+    if (!displayName) {
+      console.error('Undefined model name passed to mapModelName');
+      return 'markovChain'; // Default to markovChain if undefined
+    }
+
+    // First try direct mapping if it's a tool name
+    if (this.modelWeights.hasOwnProperty(displayName)) {
+      return displayName;
+    }
+
+    // Then try to map from display name
     const key = displayName.toLowerCase();
-    return this.modelNameMap[key] || key;
+    const mappedName = this.modelNameMap[key];
+    
+    if (!mappedName) {
+      console.error(`No mapping found for model name: ${displayName}`);
+      // Try to match the case-insensitive version of the key
+      const toolKey = Object.keys(this.modelWeights)
+        .find(k => k.toLowerCase() === displayName.toLowerCase());
+      return toolKey || displayName;
+    }
+    
+    return mappedName;
   }
 
   // Update accuracy for a specific model
@@ -75,10 +115,19 @@ class ModelManager {
   // Calculate recent accuracy for a model with exponential decay
   getRecentAccuracy(modelName) {
     const mappedName = this.mapModelName(modelName);
+    
+    // Safety check for undefined model
+    if (!this.recentAccuracy[mappedName]) {
+      console.error(`Unknown model name in getRecentAccuracy: ${modelName} (mapped to: ${mappedName})`);
+      return 0.25; // Default accuracy for unknown model
+    }
+    
     const accuracies = this.recentAccuracy[mappedName];
     const confidences = this.confidenceScores[mappedName];
     
-    if (accuracies.length === 0) return 0.25; // Default accuracy for no data
+    if (!accuracies || !confidences || accuracies.length === 0) {
+      return 0.25; // Default accuracy for no data
+    }
     
     let weightedSum = 0;
     let weightSum = 0;
@@ -87,13 +136,13 @@ class ModelManager {
     for (let i = accuracies.length - 1; i >= 0; i--) {
       const age = accuracies.length - 1 - i;
       const weight = Math.pow(decayFactor, age);
-      const confidence = confidences[i];
+      const confidence = confidences[i] || 0.25; // Default confidence if undefined
       
       weightedSum += accuracies[i] * weight * (1 + this.confidenceWeight * (confidence - 0.25));
       weightSum += weight;
     }
     
-    return weightedSum / weightSum;
+    return weightSum > 0 ? weightedSum / weightSum : 0.25;
   }
 
   // Update weights based on recent performance and confidence
@@ -142,7 +191,7 @@ class ModelManager {
     if (recentAccuracies.length < 2) return 1.0;
     
     // Calculate variance in recent accuracies
-    const mean = recentAccuracies.reduce((a, b) => a + b, 0) / recentAccuracies.length;
+    const mean = recentAccuracies.reduce((a, b) => a + b) / recentAccuracies.length;
     const variance = recentAccuracies.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recentAccuracies.length;
     
     // Higher stability (lower variance) means we can learn faster
@@ -195,14 +244,124 @@ class AnalysisTool {
     this.predictionAccuracy = [];
     this.recentData = []; // Store recent data for sliding window
     this.maxRecentData = 50; // Maximum size of recent data window
+    
+    // Map display names to internal names
+    const displayToInternal = {
+      'Markov Chain': 'markovChain',
+      'Entropy Analysis': 'entropy',
+      'Chi-Square Test': 'chiSquare',
+      'Monte Carlo Simulation': 'monteCarlo',
+      'ARIMA Analysis': 'arima',
+      'LSTM Analysis': 'lstm',
+      'HMM Analysis': 'hmm'
+    };
+    
+    // Get the internal name for this model
+    this.internalName = displayToInternal[name] || name.toLowerCase().replace(/\s+/g, '');
+    
+    // Initialize debug logging
+    this.debugLog = [];
+    this.maxLogEntries = 100;
+    
+    this.learningRate = 0.1;
+    this.confidenceThreshold = 0.6;
+    this.updateCounter = 0;
+    this.performanceHistory = [];
+    this.lastUpdateTime = Date.now();
+    
+    // Performance tracking
+    this.successStreak = 0;
+    this.totalPredictions = 0;
+    this.weightAdjustmentFactor = 1.0;
+  }
+
+  logState(data) {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      modelState: this.getModelState(),
+      inputData: data,
+      prediction: this.lastPrediction,
+      accuracy: this.getAverageAccuracy(),
+      confidence: this.getCurrentConfidence()
+    };
+    
+    this.debugLog.unshift(entry);
+    if (this.debugLog.length > this.maxLogEntries) {
+      this.debugLog.pop();
+    }
+    
+    console.log(`[${this.name}] State Update:`, entry);
+  }
+
+  getModelState() {
+    return {
+      learningRate: this.learningRate,
+      successStreak: this.successStreak,
+      weightAdjustment: this.weightAdjustmentFactor,
+      recentDataSize: this.recentData.length
+    };
+  }
+
+  updateLearningRate() {
+    // Adjust learning rate based on performance
+    const recentAccuracy = this.getRecentAccuracy(10);
+    if (recentAccuracy > 0.8) {
+      this.learningRate = Math.max(0.05, this.learningRate * 0.95); // Slow down learning when performing well
+    } else if (recentAccuracy < 0.4) {
+      this.learningRate = Math.min(0.3, this.learningRate * 1.05); // Speed up learning when performing poorly
+    }
+  }
+
+  getCurrentConfidence() {
+    const recentAccuracy = this.getRecentAccuracy(5);
+    const stabilityFactor = this.calculateStabilityFactor();
+    const dataQualityFactor = this.recentData.length / this.maxRecentData;
+    
+    return Math.min(1, recentAccuracy * stabilityFactor * dataQualityFactor);
+  }
+
+  calculateStabilityFactor() {
+    if (this.predictionAccuracy.length < 5) return 0.5;
+    
+    // Calculate variance in recent predictions
+    const recent = this.predictionAccuracy.slice(-5);
+    const mean = recent.reduce((a, b) => a + b) / recent.length;
+    const variance = recent.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recent.length;
+    
+    return 1 - Math.min(1, variance * 2); // Lower variance = higher stability
+  }
+
+  getRecentAccuracy(window = 10) {
+    const recent = this.predictionAccuracy.slice(-window);
+    if (recent.length === 0) return 0;
+    return recent.reduce((a, b) => a + b) / recent.length;
   }
 
   updateAccuracy(predicted, actual) {
     if (this.lastPrediction !== null) {
       const accuracy = predicted === actual ? 1 : 0;
       this.predictionAccuracy.push(accuracy);
-      // Use the original display name, let ModelManager handle the mapping
-      modelManager.updateAccuracy(this.name, predicted, actual);
+      this.totalPredictions++;
+      
+      // Update success streak
+      if (accuracy === 1) {
+        this.successStreak++;
+        this.weightAdjustmentFactor = Math.min(2.0, this.weightAdjustmentFactor * 1.05);
+      } else {
+        this.successStreak = 0;
+        this.weightAdjustmentFactor = Math.max(0.5, this.weightAdjustmentFactor * 0.95);
+      }
+      
+      // Calculate confidence with new factors
+      const confidence = this.getCurrentConfidence();
+      
+      // Update learning rate
+      this.updateLearningRate();
+      
+      // Log state after update
+      this.logState(actual);
+      
+      modelManager.updateAccuracy(this.internalName, predicted, actual, confidence);
     }
   }
 
@@ -211,7 +370,6 @@ class AnalysisTool {
     return this.predictionAccuracy.reduce((a, b) => a + b) / this.predictionAccuracy.length;
   }
 
-  // Add new data point to recent data
   addToRecentData(symbol) {
     this.recentData.push(symbol);
     if (this.recentData.length > this.maxRecentData) {
@@ -219,9 +377,8 @@ class AnalysisTool {
     }
   }
 
-  // Get weight for this model
   getModelWeight() {
-    return modelManager.getWeight(this.name);
+    return modelManager.getWeight(this.internalName);
   }
 }
 
@@ -232,6 +389,15 @@ class MarkovChain extends AnalysisTool {
     this.transitionMatrix = {};
     this.recentWeight = 2.0; // Weight for recent transitions
     this.decayFactor = 0.95; // Decay factor for older transitions
+    this.smoothingFactor = 0.1;
+  }
+  
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      transitionMatrix: this.transitionMatrix,
+      smoothingFactor: this.smoothingFactor
+    };
   }
 
   analyze(symbols) {
@@ -308,6 +474,16 @@ class EntropyAnalysis extends AnalysisTool {
     super('Entropy Analysis');
     this.slidingWindowSize = 30;
     this.entropyThreshold = 1.5; // Threshold for pattern detection
+    this.entropyWindow = 20;
+    this.recentEntropies = [];
+  }
+  
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      entropyWindow: this.entropyWindow,
+      recentEntropies: this.recentEntropies
+    };
   }
 
   calculateEntropy(data) {
@@ -331,6 +507,7 @@ class EntropyAnalysis extends AnalysisTool {
       for (let i = 0; i < data.length - len; i++) {
         const pattern = data.slice(i, i + len).join(',');
         const next = data[i + len];
+        
         if (next !== undefined) {
           if (!patterns[pattern]) {
             patterns[pattern] = {};
@@ -411,6 +588,16 @@ class ChiSquareTest extends AnalysisTool {
     this.windowSize = 40;
     this.expectedDistribution = { 0: 0.25, 1: 0.25, 2: 0.25, 3: 0.25 };
     this.adaptationRate = 0.1;
+    this.expectedFrequencies = {};
+    this.observedFrequencies = {};
+  }
+  
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      expectedFrequencies: this.expectedFrequencies,
+      observedFrequencies: this.observedFrequencies
+    };
   }
 
   updateExpectedDistribution(observed) {
@@ -505,6 +692,15 @@ class MonteCarloSimulation extends AnalysisTool {
     this.patternLength = 3;
     this.adaptivePatterns = new Map();
     this.minPatternCount = 5;
+    this.patternWeights = {};
+  }
+  
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      numSimulations: this.numSimulations,
+      patternWeights: this.patternWeights
+    };
   }
 
   updatePatterns(symbols) {
@@ -622,6 +818,17 @@ class ARIMAAnalysis extends AnalysisTool {
     this.p = 2;  // AR order
     this.d = 1;  // Difference order
     this.q = 2;  // MA order
+    this.config = { p: 1, d: 0, q: 1 };
+    this.lastTraining = Date.now();
+    this.retrainingInterval = 1000 * 60; // 1 minute
+  }
+  
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      config: this.config,
+      timeSinceTraining: Date.now() - this.lastTraining
+    };
   }
 
   // Calculate autocorrelation for different lags
@@ -799,13 +1006,489 @@ class ARIMAAnalysis extends AnalysisTool {
   }
 }
 
-// Initialize analysis tools
+// LSTM Analysis
+class LSTMAnalysis extends AnalysisTool {
+  constructor() {
+    super('LSTM Analysis');
+    this.sequenceLength = 10;
+    this.model = null;
+    this.isTraining = false;
+    this.symbolMap = new Map();
+    this.reverseSymbolMap = new Map();
+    this.trainingBuffer = [];
+    this.minTrainingSize = 50; // Reduced from 100
+    this.lastPredictions = [];
+    this.outputSize = 4; // Fixed size for card symbols
+    this.initialized = false;
+  }
+
+  async initializeModel() {
+    if (this.initialized) return;
+
+    try {
+      this.model = tf.sequential();
+      this.model.add(tf.layers.lstm({
+        units: 64, // Reduced from 128
+        inputShape: [this.sequenceLength, 1],
+        returnSequences: false
+      }));
+      this.model.add(tf.layers.dense({
+        units: 32, // Reduced from 64
+        activation: 'relu'
+      }));
+      this.model.add(tf.layers.dropout(0.1)); // Reduced dropout
+      this.model.add(tf.layers.dense({
+        units: this.outputSize,
+        activation: 'softmax'
+      }));
+
+      this.model.compile({
+        optimizer: tf.train.adam(0.005), // Increased learning rate
+        loss: 'categoricalCrossentropy',
+        metrics: ['accuracy']
+      });
+
+      this.initialized = true;
+      console.log('[LSTM] Model initialized');
+    } catch (error) {
+      console.error('[LSTM] Initialization error:', error);
+      this.initialized = false;
+    }
+  }
+
+  preprocessData(symbols) {
+    // Map symbols to numerical values (0-3)
+    const symbolToIndex = {'♠': 0, '♣': 1, '♥': 2, '♦': 3};
+    return symbols.map(s => symbolToIndex[s] !== undefined ? symbolToIndex[s] : 0);
+  }
+
+  async train(symbols) {
+    if (this.isTraining || symbols.length < this.minTrainingSize) return;
+    
+    try {
+      this.isTraining = true;
+      await this.initializeModel();
+
+      const normalizedData = this.preprocessData(symbols);
+      
+      // Prepare sequences for training
+      const sequences = [];
+      const targets = [];
+      
+      for (let i = 0; i < normalizedData.length - this.sequenceLength - 1; i++) {
+        const sequence = normalizedData.slice(i, i + this.sequenceLength);
+        const target = normalizedData[i + this.sequenceLength];
+        sequences.push(sequence);
+        targets.push(target);
+      }
+
+      // Convert to tensors
+      const inputTensor = tf.tensor3d(sequences, [sequences.length, this.sequenceLength, 1]);
+      const targetTensor = tf.tensor2d(targets.map(t => {
+        const arr = new Array(this.outputSize).fill(0);
+        arr[t] = 1;
+        return arr;
+      }));
+
+      // Train the model
+      await this.model.fit(inputTensor, targetTensor, {
+        epochs: 5, // Reduced from 10
+        batchSize: 16, // Reduced from 32
+        shuffle: true,
+        verbose: 1 // Added verbosity
+      });
+
+      console.log('[LSTM] Training completed');
+      
+      // Cleanup
+      inputTensor.dispose();
+      targetTensor.dispose();
+      
+    } catch (error) {
+      console.error('[LSTM] Training error:', error);
+    } finally {
+      this.isTraining = false;
+    }
+  }
+
+  async predict(sequence) {
+    if (!this.initialized || sequence.length < this.sequenceLength) {
+      return { prediction: null, confidence: 0.25 };
+    }
+
+    try {
+      const normalizedData = this.preprocessData(sequence);
+      const inputSequence = normalizedData.slice(-this.sequenceLength);
+      const inputTensor = tf.tensor3d([inputSequence], [1, this.sequenceLength, 1]);
+      
+      const prediction = await this.model.predict(inputTensor).array();
+      inputTensor.dispose();
+
+      const probabilities = prediction[0];
+      const maxProbIndex = probabilities.indexOf(Math.max(...probabilities));
+      const symbols = ['♠', '♣', '♥', '♦'];
+      const predictedSymbol = symbols[maxProbIndex];
+      const confidence = probabilities[maxProbIndex];
+
+      this.lastPredictions = probabilities;
+
+      return {
+        prediction: predictedSymbol,
+        confidence: confidence,
+        probabilities: probabilities
+      };
+    } catch (error) {
+      console.error('[LSTM] Prediction error:', error);
+      return { prediction: null, confidence: 0.25 };
+    }
+  }
+
+  async analyze(symbols) {
+    try {
+      // Add to training buffer
+      this.trainingBuffer.push(...symbols);
+      if (this.trainingBuffer.length >= this.minTrainingSize) {
+        await this.train(this.trainingBuffer);
+        this.trainingBuffer = this.trainingBuffer.slice(-this.sequenceLength * 2);
+      }
+
+      const result = await this.predict(symbols);
+      this.lastPrediction = result.prediction;
+      return result;
+    } catch (error) {
+      console.error('[LSTM] Analysis error:', error);
+      return { prediction: null, confidence: 0.25 };
+    }
+  }
+
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      sequenceLength: this.sequenceLength,
+      isTraining: this.isTraining,
+      modelInitialized: this.initialized,
+      trainingBufferSize: this.trainingBuffer.length,
+      lastPredictions: this.lastPredictions
+    };
+  }
+}
+
+// Custom HMM implementation
+class HMMModel {
+  constructor(numStates, numObservations) {
+    this.numStates = numStates;
+    this.numObservations = numObservations;
+    this.initialProb = new Array(numStates).fill(1/numStates);
+    this.transitionProb = Array(numStates).fill().map(() => 
+      new Array(numStates).fill(1/numStates)
+    );
+    this.emissionProb = Array(numStates).fill().map(() => 
+      new Array(numObservations).fill(1/numObservations)
+    );
+  }
+
+  forward(observations) {
+    const T = observations.length;
+    const alpha = Array(T).fill().map(() => new Array(this.numStates).fill(0));
+    
+    // Initialize
+    for (let i = 0; i < this.numStates; i++) {
+      alpha[0][i] = this.initialProb[i] * this.emissionProb[i][observations[0]];
+    }
+    
+    // Forward recursion
+    for (let t = 1; t < T; t++) {
+      for (let j = 0; j < this.numStates; j++) {
+        let sum = 0;
+        for (let i = 0; i < this.numStates; i++) {
+          sum += alpha[t-1][i] * this.transitionProb[i][j];
+        }
+        alpha[t][j] = sum * this.emissionProb[j][observations[t]];
+      }
+    }
+    
+    return alpha;
+  }
+
+  backward(observations) {
+    const T = observations.length;
+    const beta = Array(T).fill().map(() => new Array(this.numStates).fill(0));
+    
+    // Initialize
+    for (let i = 0; i < this.numStates; i++) {
+      beta[T-1][i] = 1;
+    }
+    
+    // Backward recursion
+    for (let t = T-2; t >= 0; t--) {
+      for (let i = 0; i < this.numStates; i++) {
+        let sum = 0;
+        for (let j = 0; j < this.numStates; j++) {
+          sum += this.transitionProb[i][j] * this.emissionProb[j][observations[t+1]] * beta[t+1][j];
+        }
+        beta[t][i] = sum;
+      }
+    }
+    
+    return beta;
+  }
+
+  viterbi(observations) {
+    const T = observations.length;
+    const delta = Array(T).fill().map(() => new Array(this.numStates).fill(0));
+    const psi = Array(T).fill().map(() => new Array(this.numStates).fill(0));
+    
+    // Initialize
+    for (let i = 0; i < this.numStates; i++) {
+      delta[0][i] = this.initialProb[i] * this.emissionProb[i][observations[0]];
+      psi[0][i] = 0;
+    }
+    
+    // Recursion
+    for (let t = 1; t < T; t++) {
+      for (let j = 0; j < this.numStates; j++) {
+        let maxVal = -Infinity;
+        let maxIndex = 0;
+        
+        for (let i = 0; i < this.numStates; i++) {
+          const val = delta[t-1][i] * this.transitionProb[i][j];
+          if (val > maxVal) {
+            maxVal = val;
+            maxIndex = i;
+          }
+        }
+        
+        delta[t][j] = maxVal * this.emissionProb[j][observations[t]];
+        psi[t][j] = maxIndex;
+      }
+    }
+    
+    // Backtrack
+    const path = new Array(T);
+    let maxVal = -Infinity;
+    let maxIndex = 0;
+    
+    for (let i = 0; i < this.numStates; i++) {
+      if (delta[T-1][i] > maxVal) {
+        maxVal = delta[T-1][i];
+        maxIndex = i;
+      }
+    }
+    
+    path[T-1] = maxIndex;
+    for (let t = T-2; t >= 0; t--) {
+      path[t] = psi[t+1][path[t+1]];
+    }
+    
+    return path;
+  }
+
+  train(observations, maxIterations = 100, tolerance = 0.001) {
+    let oldLogProb = -Infinity;
+    
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
+      // E-step
+      const alpha = this.forward(observations);
+      const beta = this.backward(observations);
+      
+      // Calculate gamma and xi
+      const T = observations.length;
+      const gamma = Array(T).fill().map(() => new Array(this.numStates).fill(0));
+      const xi = Array(T-1).fill().map(() => 
+        Array(this.numStates).fill().map(() => new Array(this.numStates).fill(0))
+      );
+      
+      // Calculate gamma
+      for (let t = 0; t < T; t++) {
+        let sum = 0;
+        for (let i = 0; i < this.numStates; i++) {
+          gamma[t][i] = alpha[t][i] * beta[t][i];
+          sum += gamma[t][i];
+        }
+        for (let i = 0; i < this.numStates; i++) {
+          gamma[t][i] /= sum;
+        }
+      }
+      
+      // Calculate xi
+      for (let t = 0; t < T-1; t++) {
+        let sum = 0;
+        for (let i = 0; i < this.numStates; i++) {
+          for (let j = 0; j < this.numStates; j++) {
+            xi[t][i][j] = alpha[t][i] * this.transitionProb[i][j] * 
+                         this.emissionProb[j][observations[t+1]] * beta[t+1][j];
+            sum += xi[t][i][j];
+          }
+        }
+        for (let i = 0; i < this.numStates; i++) {
+          for (let j = 0; j < this.numStates; j++) {
+            xi[t][i][j] /= sum;
+          }
+        }
+      }
+      
+      // M-step
+      // Update initial probabilities
+      for (let i = 0; i < this.numStates; i++) {
+        this.initialProb[i] = gamma[0][i];
+      }
+      
+      // Update transition probabilities
+      for (let i = 0; i < this.numStates; i++) {
+        for (let j = 0; j < this.numStates; j++) {
+          let numerator = 0;
+          let denominator = 0;
+          for (let t = 0; t < T-1; t++) {
+            numerator += xi[t][i][j];
+            denominator += gamma[t][i];
+          }
+          this.transitionProb[i][j] = numerator / denominator;
+        }
+      }
+      
+      // Update emission probabilities
+      for (let i = 0; i < this.numStates; i++) {
+        for (let k = 0; k < this.numObservations; k++) {
+          let numerator = 0;
+          let denominator = 0;
+          for (let t = 0; t < T; t++) {
+            if (observations[t] === k) {
+              numerator += gamma[t][i];
+            }
+            denominator += gamma[t][i];
+          }
+          this.emissionProb[i][k] = numerator / denominator;
+        }
+      }
+      
+      // Check for convergence
+      let logProb = 0;
+      for (let i = 0; i < this.numStates; i++) {
+        logProb += alpha[T-1][i];
+      }
+      logProb = Math.log(logProb);
+      
+      if (Math.abs(logProb - oldLogProb) < tolerance) {
+        break;
+      }
+      oldLogProb = logProb;
+    }
+  }
+}
+
+// HMM Analysis
+class HMMAnalysis extends AnalysisTool {
+  constructor() {
+    super('HMM Analysis');
+    this.numStates = 4;
+    this.numObservations = 4;
+    this.model = null;
+    this.minSequenceLength = 20;
+    this.trainingBuffer = [];
+    this.initialized = false;
+    this.stateHistory = [];
+  }
+
+  initializeModel() {
+    if (this.initialized) return;
+    this.model = new HMMModel(this.numStates, this.numObservations);
+    this.initialized = true;
+    console.log('[HMM] Model initialized');
+  }
+
+  preprocessData(symbols) {
+    // Map symbols directly to observation indices
+    const symbolToIndex = {'♠': 0, '♣': 1, '♥': 2, '♦': 3};
+    return symbols.map(s => symbolToIndex[s] !== undefined ? symbolToIndex[s] : 0);
+  }
+
+  train(symbols) {
+    if (symbols.length < this.minSequenceLength) return;
+
+    try {
+      this.initializeModel();
+      const observations = this.preprocessData(symbols);
+      
+      // Train the model
+      this.model.train(observations, 50, 0.001); // Reduced iterations
+      console.log('[HMM] Training completed');
+    } catch (error) {
+      console.error('[HMM] Training error:', error);
+    }
+  }
+
+  predict(sequence) {
+    if (!this.initialized || sequence.length < 2) {
+      return { prediction: null, confidence: 0.25 };
+    }
+
+    try {
+      const observations = this.preprocessData(sequence);
+      const viterbiPath = this.model.viterbi(observations);
+      const lastState = viterbiPath[viterbiPath.length - 1];
+      
+      // Get emission probabilities for the predicted state
+      const emissionProbs = this.model.emissionProb[lastState];
+      
+      // Find most likely observation
+      const maxProbIndex = emissionProbs.indexOf(Math.max(...emissionProbs));
+      const symbols = ['♠', '♣', '♥', '♦'];
+      const predictedSymbol = symbols[maxProbIndex];
+      const confidence = emissionProbs[maxProbIndex];
+
+      // Update state history
+      this.stateHistory = viterbiPath.slice(-5);
+
+      return {
+        prediction: predictedSymbol,
+        confidence: confidence,
+        stateSequence: this.stateHistory
+      };
+    } catch (error) {
+      console.error('[HMM] Prediction error:', error);
+      return { prediction: null, confidence: 0.25 };
+    }
+  }
+
+  analyze(symbols) {
+    try {
+      // Add to training buffer
+      this.trainingBuffer.push(...symbols);
+      if (this.trainingBuffer.length >= this.minSequenceLength) {
+        this.train(this.trainingBuffer);
+        this.trainingBuffer = this.trainingBuffer.slice(-this.minSequenceLength);
+      }
+
+      const result = this.predict(symbols);
+      this.lastPrediction = result.prediction;
+      return result;
+    } catch (error) {
+      console.error('[HMM] Analysis error:', error);
+      return { prediction: null, confidence: 0.25 };
+    }
+  }
+
+  getModelState() {
+    return {
+      ...super.getModelState(),
+      numStates: this.numStates,
+      numObservations: this.numObservations,
+      modelInitialized: this.initialized,
+      trainingBufferSize: this.trainingBuffer.length,
+      stateHistory: this.stateHistory
+    };
+  }
+}
+
+// Initialize analysis tools with new ML models
 const analysisTools = {
   markovChain: new MarkovChain(),
   entropy: new EntropyAnalysis(),
   chiSquare: new ChiSquareTest(),
   monteCarlo: new MonteCarloSimulation(),
-  arima: new ARIMAAnalysis()
+  arima: new ARIMAAnalysis(),
+  lstm: new LSTMAnalysis(),
+  hmm: new HMMAnalysis()
 };
 
 router.get('/', async (req, res) => {
@@ -826,10 +1509,19 @@ router.get('/', async (req, res) => {
     // Run all analyses if there are enough symbols
     const analyses = {};
     for (const [name, tool] of Object.entries(analysisTools)) {
-      analyses[name] = tool.analyze(symbols);
-      // Update accuracy if we have new data
-      if (tool.lastPrediction !== null) {
-        tool.updateAccuracy(tool.lastPrediction, symbols[symbols.length - 1]);
+      try {
+        analyses[name] = tool.analyze(symbols);
+        // Update accuracy if we have new data
+        if (tool.lastPrediction !== null) {
+          tool.updateAccuracy(tool.lastPrediction, symbols[symbols.length - 1]);
+        }
+      } catch (error) {
+        console.error(`Error in ${name} analysis:`, error);
+        analyses[name] = {
+          prediction: undefined,
+          confidence: 0.25,
+          error: error.message
+        };
       }
     }
 
@@ -840,7 +1532,6 @@ router.get('/', async (req, res) => {
       analyses: analyses
     };
     
-    console.log('Analysis results:', response);
     res.json(response);
     
   } catch (error) {
