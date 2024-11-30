@@ -42,6 +42,7 @@ router.get('/debug/schema', async (req, res) => {
 // Get all sequences
 router.get('/', async (req, res) => {
   try {
+    console.log('[DB] Fetching all sequences');
     const result = await pool.query(
       'SELECT symbol, created_at FROM sequences ORDER BY created_at ASC'
     );
@@ -51,9 +52,15 @@ router.get('/', async (req, res) => {
       created_at: row.created_at.toISOString()
     }));
     
+    console.log('[DB] Retrieved sequences:', {
+      count: sequence.length,
+      first: sequence[0],
+      last: sequence[sequence.length - 1]
+    });
+    
     res.json({ sequence });
   } catch (err) {
-    console.error('Error fetching sequences:', err);
+    console.error('[DB] Error fetching sequences:', err);
     res.json({ sequence: [] });
   }
 });
@@ -63,35 +70,77 @@ router.post('/symbol', async (req, res) => {
   try {
     const { symbol } = req.body;
     
+    console.log('[DB] Attempting to insert symbol:', symbol);
+    
     if (typeof symbol !== 'number' || symbol < 0 || symbol > 3) {
+      console.error('[DB] Invalid symbol value:', symbol);
       return res.status(400).json({ error: 'Invalid symbol value' });
     }
 
     const result = await pool.query(
-      'INSERT INTO sequences (symbol) VALUES ($1) RETURNING created_at',
+      'INSERT INTO sequences (symbol) VALUES ($1) RETURNING *',
       [symbol]
     );
 
+    console.log('[DB] Successfully inserted symbol:', {
+      symbol: result.rows[0].symbol,
+      id: result.rows[0].id,
+      created_at: result.rows[0].created_at
+    });
+
+    // Verify data after insertion
+    const verification = await pool.query(
+      'SELECT COUNT(*) FROM sequences'
+    );
+    console.log('[DB] Total sequences after insertion:', verification.rows[0].count);
+
     res.json({ 
       success: true,
-      created_at: result.rows[0].created_at.toISOString()
+      created_at: result.rows[0].created_at.toISOString(),
+      total_sequences: verification.rows[0].count
     });
   } catch (err) {
-    console.error('Error adding symbol:', err);
+    console.error('[DB] Error adding symbol:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Undo last symbol
 router.delete('/undo', async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query(
+    await client.query('BEGIN');
+    
+    // Get the last symbol before deleting
+    const lastSymbol = await client.query(
+      'SELECT * FROM sequences ORDER BY created_at DESC LIMIT 1'
+    );
+    
+    console.log('[DB] Attempting to undo last symbol:', lastSymbol.rows[0]);
+    
+    await client.query(
       'DELETE FROM sequences WHERE id = (SELECT id FROM sequences ORDER BY created_at DESC LIMIT 1)'
     );
-    res.json({ success: true });
+    
+    // Verify deletion
+    const verification = await client.query(
+      'SELECT COUNT(*) FROM sequences'
+    );
+    
+    console.log('[DB] Sequences after undo:', verification.rows[0].count);
+    
+    await client.query('COMMIT');
+    res.json({ 
+      success: true,
+      removed: lastSymbol.rows[0],
+      remaining: verification.rows[0].count
+    });
   } catch (err) {
-    console.error('Error undoing last symbol:', err);
+    await client.query('ROLLBACK');
+    console.error('[DB] Error undoing last symbol:', err);
     res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
   }
 });
 
@@ -129,13 +178,29 @@ router.post('/generate-test-data', async (req, res) => {
 router.post('/reset', async (req, res) => {
   const client = await pool.connect();
   try {
+    console.log('[DB] Starting database reset');
+    
+    // Get count before reset
+    const beforeCount = await client.query('SELECT COUNT(*) FROM sequences');
+    console.log('[DB] Sequences before reset:', beforeCount.rows[0].count);
+    
     await client.query('BEGIN');
     await client.query('TRUNCATE sequences');
+    
+    // Verify reset
+    const afterCount = await client.query('SELECT COUNT(*) FROM sequences');
+    console.log('[DB] Sequences after reset:', afterCount.rows[0].count);
+    
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Database reset successfully' });
+    res.json({ 
+      success: true, 
+      message: 'Database reset successfully',
+      before: beforeCount.rows[0].count,
+      after: afterCount.rows[0].count
+    });
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error resetting database:', error);
+    console.error('[DB] Error resetting database:', error);
     res.status(500).json({ error: 'Failed to reset database' });
   } finally {
     client.release();

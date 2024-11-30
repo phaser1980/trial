@@ -7,22 +7,24 @@ class MonteCarloAnalysis extends AnalysisTool {
         this.simulationCount = 1000;
         this.debugLog = [];
         this.seedCandidates = new Map(); // Track potential seed values
+        this.symbolMap = ['♠', '♣', '♥', '♦'];
     }
 
     // Calculate transition probabilities from historical data
     calculateTransitionMatrix(symbols) {
-        const matrix = {
-            '♠': { '♠': 0, '♣': 0, '♥': 0, '♦': 0 },
-            '♣': { '♠': 0, '♣': 0, '♥': 0, '♦': 0 },
-            '♥': { '♠': 0, '♣': 0, '♥': 0, '♦': 0 },
-            '♦': { '♠': 0, '♣': 0, '♥': 0, '♦': 0 }
-        };
+        const matrix = {};
+        const counts = {};
+        
+        // Initialize matrices using numeric indices
+        for (let i = 0; i < 4; i++) {
+            matrix[i] = {};
+            counts[i] = 0;
+            for (let j = 0; j < 4; j++) {
+                matrix[i][j] = 0;
+            }
+        }
 
-        let counts = {
-            '♠': 0, '♣': 0, '♥': 0, '♦': 0
-        };
-
-        // Count transitions
+        // Count transitions using numeric indices
         for (let i = 0; i < symbols.length - 1; i++) {
             const current = symbols[i];
             const next = symbols[i + 1];
@@ -43,21 +45,27 @@ class MonteCarloAnalysis extends AnalysisTool {
     // Run a single simulation
     runSimulation(transitionMatrix, startSymbol, length) {
         let sequence = [startSymbol];
+        
         for (let i = 0; i < length - 1; i++) {
             const current = sequence[sequence.length - 1];
+            const probabilities = transitionMatrix[current];
+            
+            // Generate next symbol based on probabilities
             const rand = Math.random();
             let cumProb = 0;
-            let nextSymbol = '♠';
-
-            for (const symbol in transitionMatrix[current]) {
-                cumProb += transitionMatrix[current][symbol];
-                if (rand <= cumProb) {
-                    nextSymbol = symbol;
+            let nextSymbol = 0;
+            
+            for (let j = 0; j < 4; j++) {
+                cumProb += probabilities[j];
+                if (rand < cumProb) {
+                    nextSymbol = j;
                     break;
                 }
             }
+            
             sequence.push(nextSymbol);
         }
+        
         return sequence;
     }
 
@@ -109,7 +117,7 @@ class MonteCarloAnalysis extends AnalysisTool {
                 this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
                 return {
                     prediction: null,
-                    confidence: 0,
+                    confidence: 0.25,
                     message: 'Insufficient data',
                     debug: this.debugLog
                 };
@@ -121,9 +129,7 @@ class MonteCarloAnalysis extends AnalysisTool {
 
             // Run simulations
             const lastSymbol = symbols[symbols.length - 1];
-            let predictions = {
-                '♠': 0, '♣': 0, '♥': 0, '♦': 0
-            };
+            const predictions = new Array(4).fill(0);
 
             for (let i = 0; i < this.simulationCount; i++) {
                 const simulation = this.runSimulation(transitionMatrix, lastSymbol, 2);
@@ -133,23 +139,24 @@ class MonteCarloAnalysis extends AnalysisTool {
             // Find most likely next symbol
             let maxCount = 0;
             let prediction = null;
-            for (const symbol in predictions) {
-                if (predictions[symbol] > maxCount) {
-                    maxCount = predictions[symbol];
-                    prediction = symbol;
+            
+            for (let i = 0; i < predictions.length; i++) {
+                if (predictions[i] > maxCount) {
+                    maxCount = predictions[i];
+                    prediction = i;
                 }
             }
 
-            // Calculate confidence based on simulation results and historical accuracy
+            // Calculate confidence based on simulation results
             const confidence = maxCount / this.simulationCount;
             const adjustedConfidence = Math.min(0.95, confidence * (1 + this.getAccuracy()));
 
-            // Analyze for potential seed patterns
-            const seedPatterns = this.analyzeSeedPatterns(symbols);
-            if (seedPatterns.length > 0) {
-                this.debugLog.push(`Found ${seedPatterns.length} potential seed patterns`);
-                this.seedCandidates.set(Date.now(), seedPatterns[0]);
-            }
+            this.debugLog.push(`Prediction results:`, {
+                predictions,
+                maxCount,
+                confidence,
+                adjustedConfidence
+            });
 
             // Update prediction history
             this.addPrediction(prediction);
@@ -160,7 +167,6 @@ class MonteCarloAnalysis extends AnalysisTool {
                 debug: {
                     transitionMatrix,
                     simulationResults: predictions,
-                    seedPatterns: seedPatterns.slice(0, 3),
                     log: this.debugLog
                 }
             };
@@ -170,7 +176,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             this.debugLog.push(`Error in analysis: ${error.message}`);
             return {
                 prediction: null,
-                confidence: 0,
+                confidence: 0.25,
                 error: error.message,
                 debug: this.debugLog
             };

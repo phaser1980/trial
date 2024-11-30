@@ -29,17 +29,18 @@ class LSTMAnalysis extends AnalysisTool {
         this.tensors.clear();
     }
 
-    // Convert symbols to one-hot encoding
+    // Convert numeric index to one-hot encoding
     symbolToOneHot(symbol) {
-        const mapping = { '♠': [1,0,0,0], '♣': [0,1,0,0], '♥': [0,0,1,0], '♦': [0,0,0,1] };
-        return mapping[symbol] ?? null;
+        const oneHot = [0, 0, 0, 0];
+        if (symbol >= 0 && symbol < 4) {
+            oneHot[symbol] = 1;
+        }
+        return oneHot;
     }
 
-    // Convert one-hot encoding back to symbol
+    // Convert one-hot encoding back to numeric index
     oneHotToSymbol(oneHot) {
-        const mapping = ['♠', '♣', '♥', '♦'];
-        const index = oneHot.indexOf(Math.max(...oneHot));
-        return mapping[index];
+        return oneHot.indexOf(Math.max(...oneHot));
     }
 
     // Prepare sequences for LSTM
@@ -49,144 +50,161 @@ class LSTMAnalysis extends AnalysisTool {
         
         for (let i = 0; i <= symbols.length - this.sequenceLength - 1; i++) {
             const sequence = symbols.slice(i, i + this.sequenceLength);
-            const target = symbols[i + this.sequenceLength];
+            const nextSymbol = symbols[i + this.sequenceLength];
             
-            const sequenceOneHot = sequence.map(s => this.symbolToOneHot(s));
-            const targetOneHot = this.symbolToOneHot(target);
+            // Convert sequence to one-hot encodings
+            const oneHotSequence = sequence.map(s => this.symbolToOneHot(s));
+            const oneHotNext = this.symbolToOneHot(nextSymbol);
             
-            if (sequenceOneHot.includes(null) || !targetOneHot) continue;
-            
-            X.push(sequenceOneHot);
-            y.push(targetOneHot);
+            X.push(oneHotSequence);
+            y.push(oneHotNext);
         }
         
-        return { X, y };
+        return [X, y];
     }
 
     // Create and compile LSTM model
     createModel() {
-        const model = tf.sequential();
+        if (this.model) {
+            this.model.dispose();
+        }
+
+        this.model = tf.sequential();
         
-        model.add(tf.layers.lstm({
-            units: 64,
+        this.model.add(tf.layers.lstm({
+            units: 128,
             inputShape: [this.sequenceLength, 4],
             returnSequences: false
         }));
         
-        model.add(tf.layers.dropout({ rate: 0.2 }));
-        
-        model.add(tf.layers.dense({
-            units: 32,
+        this.model.add(tf.layers.dense({
+            units: 64,
             activation: 'relu'
         }));
         
-        model.add(tf.layers.dense({
+        this.model.add(tf.layers.dropout({
+            rate: 0.3
+        }));
+        
+        this.model.add(tf.layers.dense({
             units: 4,
             activation: 'softmax'
         }));
         
-        model.compile({
+        this.model.compile({
             optimizer: tf.train.adam(0.001),
             loss: 'categoricalCrossentropy',
             metrics: ['accuracy']
         });
         
-        return model;
+        return this.model;
     }
 
-    // Train the model
+    // Train model on sequences
     async trainModel(X, y) {
-        try {
-            const xTensor = this.trackTensor(tf.tensor3d(X));
-            const yTensor = this.trackTensor(tf.tensor2d(y));
-            
-            this.model = this.createModel();
-            
-            await this.model.fit(xTensor, yTensor, {
-                batchSize: this.batchSize,
-                epochs: this.epochs,
-                shuffle: true,
-                verbose: 0
-            });
-            
-            return true;
-        } catch (error) {
-            this.debugLog.push(`Training error: ${error.message}`);
-            return false;
-        }
+        const xTensor = this.trackTensor(tf.tensor3d(X));
+        const yTensor = this.trackTensor(tf.tensor2d(y));
+        
+        await this.model.fit(xTensor, yTensor, {
+            batchSize: this.batchSize,
+            epochs: this.epochs,
+            shuffle: true,
+            verbose: 0
+        });
     }
 
-    // Make prediction using trained model
+    // Make prediction for a sequence
     async predict(sequence) {
         try {
-            if (!this.model) {
-                throw new Error('Model not trained');
-            }
+            const oneHotSequence = sequence.map(s => this.symbolToOneHot(s));
+            const input = this.trackTensor(tf.tensor3d([oneHotSequence]));
+            const prediction = await this.model.predict(input);
+            const probabilities = await prediction.data();
             
-            const sequenceOneHot = sequence.map(s => this.symbolToOneHot(s));
-            const input = this.trackTensor(tf.tensor3d([sequenceOneHot]));
+            // Get prediction and confidence
+            const maxProb = Math.max(...probabilities);
+            const predictedIndex = probabilities.indexOf(maxProb);
             
-            const prediction = await this.model.predict(input).data();
-            return Array.from(prediction);
+            // Cleanup tensors
+            prediction.dispose();
+            
+            return {
+                prediction: predictedIndex,
+                confidence: maxProb
+            };
         } catch (error) {
-            this.debugLog.push(`Prediction error: ${error.message}`);
-            throw error;
+            console.error('[LSTM] Prediction error:', error);
+            return {
+                prediction: null,
+                confidence: 0.25
+            };
         }
     }
 
+    // Analyze sequence using LSTM
     async analyze(symbols) {
         try {
             this.debugLog = [];
+            this.debugLog.push(`Starting LSTM analysis with ${symbols.length} symbols`);
+
             if (symbols.length < this.minSamples) {
+                this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
                 return {
                     prediction: null,
-                    confidence: 0,
+                    confidence: 0.25,
                     message: 'Insufficient data',
                     debug: this.debugLog
                 };
             }
 
-            // Prepare data
-            const { X, y } = this.prepareSequences(symbols);
-            if (X.length === 0) {
-                throw new Error('No valid sequences found');
-            }
+            // Prepare sequences
+            const [X, y] = this.prepareSequences(symbols);
+            this.debugLog.push(`Prepared ${X.length} sequences for training`);
 
-            // Train model
-            const trained = await this.trainModel(X, y);
-            if (!trained) {
-                throw new Error('Model training failed');
-            }
+            // Create and train model
+            this.createModel();
+            await this.trainModel(X, y);
+            this.debugLog.push('Model training completed');
 
             // Get last sequence for prediction
             const lastSequence = symbols.slice(-this.sequenceLength);
-            const predictionOneHot = await this.predict(lastSequence);
-            const prediction = this.oneHotToSymbol(predictionOneHot);
+            const { prediction, confidence } = await this.predict(lastSequence);
 
-            // Calculate confidence as max probability
-            const confidence = Math.max(...predictionOneHot);
+            // Adjust confidence based on historical accuracy
+            const adjustedConfidence = Math.min(0.95, confidence * (1 + this.getAccuracy()));
+
+            this.debugLog.push(`Prediction results:`, {
+                rawPrediction: prediction,
+                rawConfidence: confidence,
+                adjustedConfidence
+            });
 
             // Update prediction history
             this.addPrediction(prediction);
 
+            // Cleanup tensors
+            this.cleanup();
+
             return {
                 prediction,
-                confidence,
+                confidence: adjustedConfidence,
                 debug: {
-                    probabilities: predictionOneHot,
+                    sequenceLength: this.sequenceLength,
+                    trainingSequences: X.length,
                     log: this.debugLog
                 }
             };
+
         } catch (error) {
             console.error('[LSTM] Analysis error:', error);
+            this.debugLog.push(`Error in analysis: ${error.message}`);
+            this.cleanup();
             return {
                 prediction: null,
-                confidence: 0,
+                confidence: 0.25,
                 error: error.message,
                 debug: this.debugLog
             };
-        } finally {
-            this.cleanup();
         }
     }
 }

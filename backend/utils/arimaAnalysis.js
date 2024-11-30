@@ -28,17 +28,6 @@ class ARIMAAnalysis extends AnalysisTool {
         this.tensors.clear();
     }
 
-    // Convert symbols to numerical values
-    symbolToNumber(symbol) {
-        const mapping = { '♠': 0, '♣': 1, '♥': 2, '♦': 3 };
-        return mapping[symbol] ?? -1;
-    }
-
-    numberToSymbol(number) {
-        const mapping = ['♠', '♣', '♥', '♦'];
-        return mapping[Math.round(number) % 4] ?? null;
-    }
-
     // Calculate differences
     difference(data, order = 1) {
         if (order === 0) return data;
@@ -51,78 +40,124 @@ class ARIMAAnalysis extends AnalysisTool {
 
     // Inverse difference
     inverseDifference(diffed, original, order = 1) {
-        if (order === 0) return diffed;
-        const result = [];
-        let lastOriginal = original[original.length - 1];
-        for (const diff of diffed) {
-            const value = diff + lastOriginal;
-            result.push(value);
-            lastOriginal = value;
+        const result = new Array(diffed.length + order).fill(0);
+        
+        // Copy original values for the first 'order' elements
+        for (let i = 0; i < order; i++) {
+            result[i] = original[i];
         }
+        
+        // Reconstruct the series
+        for (let i = order; i < result.length; i++) {
+            result[i] = diffed[i - order] + result[i - order];
+        }
+        
         return result;
     }
 
-    // Fit AR model using tensorflow
-    async fitAR(data, order) {
-        try {
-            const X = [];
-            const y = [];
-            for (let i = order; i < data.length; i++) {
-                X.push(data.slice(i - order, i));
-                y.push(data[i]);
+    // Calculate moving average coefficients
+    async calculateMA(data, order) {
+        const X = [];
+        const y = [];
+        
+        for (let i = order; i < data.length; i++) {
+            const row = [];
+            for (let j = 1; j <= order; j++) {
+                row.push(data[i - j]);
             }
-
-            const xTensor = this.trackTensor(tf.tensor2d(X));
-            const yTensor = this.trackTensor(tf.tensor1d(y));
-
-            const model = tf.sequential();
-            model.add(tf.layers.dense({ units: 1, inputShape: [order] }));
-            
-            await model.compile({
-                optimizer: tf.train.adam(0.01),
-                loss: 'meanSquaredError'
-            });
-
-            await model.fit(xTensor, yTensor, {
-                epochs: 100,
-                verbose: 0
-            });
-
-            return model;
-        } catch (error) {
-            this.debugLog.push(`AR model fitting error: ${error.message}`);
-            throw error;
+            X.push(row);
+            y.push(data[i]);
         }
+        
+        // Use TensorFlow.js for linear regression
+        const xTensor = this.trackTensor(tf.tensor2d(X));
+        const yTensor = this.trackTensor(tf.tensor1d(y));
+        
+        const model = tf.sequential();
+        model.add(tf.layers.dense({ units: 1, inputShape: [order] }));
+        model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
+        
+        await model.fit(xTensor, yTensor, { epochs: 100, verbose: 0 });
+        const weights = model.layers[0].getWeights()[0].arraySync().map(w => w[0]);
+        
+        model.dispose();
+        return weights;
     }
 
-    // Predict next value using the ARIMA model
+    // Calculate autoregressive coefficients
+    async calculateAR(data, order) {
+        const X = [];
+        const y = [];
+        
+        for (let i = order; i < data.length; i++) {
+            const row = [];
+            for (let j = 1; j <= order; j++) {
+                row.push(data[i - j]);
+            }
+            X.push(row);
+            y.push(data[i]);
+        }
+        
+        // Use TensorFlow.js for linear regression
+        const xTensor = this.trackTensor(tf.tensor2d(X));
+        const yTensor = this.trackTensor(tf.tensor1d(y));
+        
+        const model = tf.sequential();
+        model.add(tf.layers.dense({ units: 1, inputShape: [order] }));
+        model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
+        
+        await model.fit(xTensor, yTensor, { epochs: 100, verbose: 0 });
+        const weights = model.layers[0].getWeights()[0].arraySync().map(w => w[0]);
+        
+        model.dispose();
+        return weights;
+    }
+
+    // Make prediction using ARIMA model
     async predict(data) {
         try {
-            // Difference the data
-            let diffed = this.difference(data, this.d);
+            // Apply differencing
+            let diffed = data;
+            for (let i = 0; i < this.d; i++) {
+                diffed = this.difference(diffed);
+            }
             
-            // Fit AR model
-            const model = await this.fitAR(diffed, this.p);
-            
-            // Prepare last p values for prediction
-            const lastValues = diffed.slice(-this.p);
-            const input = this.trackTensor(tf.tensor2d([lastValues]));
+            // Calculate AR and MA coefficients
+            const arCoeffs = await this.calculateAR(diffed, this.p);
+            const maCoeffs = await this.calculateMA(diffed, this.q);
             
             // Make prediction
-            const diffPrediction = model.predict(input);
-            const predictionValue = await diffPrediction.data();
+            let prediction = 0;
             
-            // Inverse difference
-            const prediction = this.inverseDifference(
-                [predictionValue[0]], 
-                data,
-                this.d
-            )[0];
-
-            return prediction;
+            // AR component
+            for (let i = 0; i < this.p; i++) {
+                prediction += arCoeffs[i] * diffed[diffed.length - 1 - i];
+            }
+            
+            // MA component
+            for (let i = 0; i < this.q; i++) {
+                prediction += maCoeffs[i] * diffed[diffed.length - 1 - i];
+            }
+            
+            // Inverse differencing
+            let result = prediction;
+            for (let i = this.d - 1; i >= 0; i--) {
+                const temp = this.inverseDifference([result], data.slice(-this.d), 1);
+                result = temp[temp.length - 1];
+            }
+            
+            // Convert to symbol index (0-3)
+            result = Math.round(result) % 4;
+            if (result < 0) result += 4;
+            
+            // Calculate confidence based on model fit
+            const confidence = Math.min(0.95, 0.5 + Math.abs(arCoeffs[0]));
+            
+            return { prediction: result, confidence };
+            
         } catch (error) {
-            this.debugLog.push(`Prediction error: ${error.message}`);
-            throw error;
+            console.error('[ARIMA] Prediction error:', error);
+            return { prediction: null, confidence: 0.25 };
         }
     }
 
@@ -131,94 +166,58 @@ class ARIMAAnalysis extends AnalysisTool {
             this.debugLog = [];
             this.debugLog.push(`Starting ARIMA analysis with ${symbols.length} symbols`);
 
-            // Validate input
-            if (!Array.isArray(symbols)) {
-                this.debugLog.push('Invalid input: symbols must be an array');
-                return {
-                    prediction: null,
-                    confidence: 0,
-                    message: 'Invalid input format',
-                    debug: this.debugLog
-                };
-            }
-
             if (symbols.length < this.minSamples) {
                 this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
                 return {
                     prediction: null,
-                    confidence: 0,
+                    confidence: 0.25,
                     message: 'Insufficient data',
                     debug: this.debugLog
                 };
             }
 
-            // Filter and convert valid symbols to numbers
-            const validSymbols = ['♠', '♣', '♥', '♦'];
-            const numericalData = [];
-            const invalidSymbols = new Set();
+            // Convert symbols to numeric indices
+            const numericData = symbols.map(s => parseInt(s));
+            
+            // Get prediction
+            const { prediction, confidence } = await this.predict(numericData);
+            
+            // Adjust confidence based on historical accuracy
+            const adjustedConfidence = Math.min(0.95, confidence * (1 + this.getAccuracy()));
 
-            for (let i = 0; i < symbols.length; i++) {
-                const symbol = symbols[i];
-                if (validSymbols.includes(symbol)) {
-                    numericalData.push(this.symbolToNumber(symbol));
-                } else {
-                    invalidSymbols.add(symbol);
-                }
-            }
-
-            // Log invalid symbols if found
-            if (invalidSymbols.size > 0) {
-                this.debugLog.push(`Found invalid symbols: ${Array.from(invalidSymbols).join(', ')}`);
-            }
-
-            // Check if we have enough valid data after filtering
-            if (numericalData.length < this.minSamples) {
-                this.debugLog.push(`Insufficient valid symbols after filtering: ${numericalData.length} < ${this.minSamples}`);
-                return {
-                    prediction: null,
-                    confidence: 0,
-                    message: 'Insufficient valid symbols',
-                    debug: this.debugLog
-                };
-            }
-
-            // Log data quality metrics
-            const validRatio = numericalData.length / symbols.length;
-            this.debugLog.push(`Data quality: ${(validRatio * 100).toFixed(1)}% valid symbols`);
-
-            // Make prediction with valid data
-            const numericPrediction = await this.predict(numericalData);
-            const prediction = this.numberToSymbol(numericPrediction);
-
-            // Adjust confidence based on data quality
-            let confidence = Math.min(0.95, 0.7 + this.getAccuracy());
-            confidence *= validRatio; // Reduce confidence if we had to filter out invalid symbols
+            this.debugLog.push(`Prediction results:`, {
+                prediction,
+                rawConfidence: confidence,
+                adjustedConfidence
+            });
 
             // Update prediction history
             this.addPrediction(prediction);
 
+            // Cleanup tensors
+            this.cleanup();
+
             return {
                 prediction,
-                confidence,
+                confidence: adjustedConfidence,
                 debug: {
-                    numericalPrediction: numericPrediction,
-                    validSymbols: numericalData.length,
-                    totalSymbols: symbols.length,
-                    dataQuality: validRatio,
+                    p: this.p,
+                    d: this.d,
+                    q: this.q,
                     log: this.debugLog
                 }
             };
 
         } catch (error) {
             console.error('[ARIMA] Analysis error:', error);
+            this.debugLog.push(`Error in analysis: ${error.message}`);
+            this.cleanup();
             return {
                 prediction: null,
-                confidence: 0,
+                confidence: 0.25,
                 error: error.message,
                 debug: this.debugLog
             };
-        } finally {
-            this.cleanup();
         }
     }
 }
