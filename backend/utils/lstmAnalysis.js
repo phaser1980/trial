@@ -12,6 +12,7 @@ class LSTMAnalysis extends AnalysisTool {
         this.tensors = new Set();
         this.model = null;
         this.lastTrainingLength = null;
+        this.numSymbols = 4; // Total number of symbols (0-3)
     }
 
     // Keep track of tensors
@@ -32,8 +33,8 @@ class LSTMAnalysis extends AnalysisTool {
 
     // Convert numeric index to one-hot encoding
     symbolToOneHot(symbol) {
-        const oneHot = [0, 0, 0, 0];
-        if (symbol >= 0 && symbol < 4) {
+        const oneHot = Array(this.numSymbols).fill(0);
+        if (symbol >= 0 && symbol < this.numSymbols) {
             oneHot[symbol] = 1;
         }
         return oneHot;
@@ -78,7 +79,7 @@ class LSTMAnalysis extends AnalysisTool {
                 units: 128,
                 returnSequences: true
             }),
-            inputShape: [this.sequenceLength, 4]
+            inputShape: [this.sequenceLength, this.numSymbols]
         }));
         
         // Add another LSTM layer
@@ -101,7 +102,7 @@ class LSTMAnalysis extends AnalysisTool {
         this.model.add(tf.layers.batchNormalization());
         
         this.model.add(tf.layers.dense({
-            units: 4,
+            units: this.numSymbols,
             activation: 'softmax'
         }));
         
@@ -163,13 +164,13 @@ class LSTMAnalysis extends AnalysisTool {
         try {
             if (!this.model) {
                 console.error('[LSTM] Model not initialized');
-                return { prediction: 0, confidence: 0.25 }; // Default to first symbol
+                return { prediction: 0, confidence: 0.25 };
             }
 
             const oneHotSequence = sequence.map(s => this.symbolToOneHot(s));
             if (oneHotSequence.includes(null)) {
                 console.error('[LSTM] Invalid symbols in sequence');
-                return { prediction: 0, confidence: 0.25 }; // Default to first symbol
+                return { prediction: 0, confidence: 0.25 };
             }
 
             const input = this.trackTensor(tf.tensor3d([oneHotSequence]));
@@ -178,30 +179,36 @@ class LSTMAnalysis extends AnalysisTool {
             
             // Get prediction and confidence
             const maxProb = Math.max(...probabilities);
-            const predictedIndex = probabilities.indexOf(maxProb);
-            
-            // Cleanup tensors
-            prediction.dispose();
-            
-            console.log('[LSTM] Prediction result:', {
-                probabilities,
-                maxProb,
-                predictedIndex
-            });
+            const predictionIndex = probabilities.indexOf(maxProb);
 
-            // If confidence is too low, use uniform distribution
-            if (maxProb < 0.25) {
-                console.log('[LSTM] Low confidence, using uniform prediction');
+            // Handle NaN values
+            if (isNaN(maxProb) || isNaN(predictionIndex)) {
+                console.error('[LSTM] NaN values detected in prediction');
                 return { prediction: 0, confidence: 0.25 };
             }
 
+            // Calculate entropy-based confidence
+            const entropy = -probabilities.reduce((sum, p) => {
+                if (p <= 0) return sum;
+                return sum + (p * Math.log2(p));
+            }, 0);
+            const normalizedEntropy = entropy / Math.log2(this.numSymbols);
+            const entropyConfidence = 1 - normalizedEntropy;
+
+            // Combine probability and entropy confidence
+            const confidence = Math.min(0.95, Math.max(0.25,
+                (maxProb * 0.6) + (entropyConfidence * 0.4)
+            ));
+
             return {
-                prediction: predictedIndex,
-                confidence: maxProb
+                prediction: predictionIndex,
+                confidence: confidence,
+                probabilities: Array.from(probabilities)
             };
+
         } catch (error) {
             console.error('[LSTM] Prediction error:', error);
-            return { prediction: 0, confidence: 0.25 }; // Default to first symbol
+            return { prediction: 0, confidence: 0.25 };
         }
     }
 
@@ -209,11 +216,7 @@ class LSTMAnalysis extends AnalysisTool {
     async analyze(symbols) {
         try {
             this.debugLog = [];
-            console.log('[LSTM] Starting analysis with symbols:', {
-                total: symbols.length,
-                last10: symbols.slice(-10),
-                lastSymbol: symbols[symbols.length - 1]
-            });
+            console.log('[LSTM] Starting analysis with', symbols.length, 'symbols');
 
             if (symbols.length < this.minSamples) {
                 console.log('[LSTM] Insufficient data:', symbols.length);
@@ -227,12 +230,7 @@ class LSTMAnalysis extends AnalysisTool {
 
             // Prepare sequences
             const [X, y] = this.prepareSequences(symbols);
-            console.log('[LSTM] Prepared sequences:', {
-                inputSequences: X.length,
-                outputSequences: y.length,
-                sampleInput: X[0],
-                sampleOutput: y[0]
-            });
+            console.log('[LSTM] Prepared', X.length, 'sequences');
 
             if (X.length === 0) {
                 console.log('[LSTM] No valid sequences generated');
@@ -247,24 +245,13 @@ class LSTMAnalysis extends AnalysisTool {
             // Create and train model if needed
             if (!this.model || this.needsRetraining(symbols)) {
                 this.createModel();
-                console.log('[LSTM] Model created:', {
-                    layers: this.model.layers.map(l => ({
-                        name: l.name,
-                        units: l.units,
-                        activation: l.activation
-                    }))
-                });
-
                 await this.trainModel(X, y);
-                console.log('[LSTM] Model training completed');
             }
 
             // Get last sequence for prediction
             const lastSequence = symbols.slice(-this.sequenceLength);
-            console.log('[LSTM] Last sequence for prediction:', lastSequence);
 
             if (lastSequence.length < this.sequenceLength) {
-                console.log('[LSTM] Insufficient sequence length:', lastSequence.length);
                 return {
                     prediction: null,
                     confidence: 0,
@@ -275,42 +262,22 @@ class LSTMAnalysis extends AnalysisTool {
 
             // Make prediction
             const result = await this.predict(lastSequence);
+            
             if (!result || result.confidence < 0.3) {
-                console.log('[LSTM] Low confidence prediction:', result);
                 return {
                     prediction: null,
                     confidence: 0,
                     message: 'Low confidence prediction',
-                    debug: this.debugLog
+                    debug: this.debugLog,
+                    probabilities: result?.probabilities
                 };
             }
 
-            // Adjust confidence based on historical accuracy
-            const accuracy = this.getAccuracy();
-            const adjustedConfidence = Math.min(0.95, result.confidence * (1 + accuracy));
-            
-            console.log('[LSTM] Final prediction:', {
-                prediction: result.prediction,
-                rawConfidence: result.confidence,
-                adjustedConfidence,
-                accuracy,
-                symbol: result.prediction !== null ? ['♠', '♣', '♥', '♦'][result.prediction] : 'None'
-            });
-
             return {
                 prediction: result.prediction,
-                confidence: adjustedConfidence,
-                debug: {
-                    sequenceLength: this.sequenceLength,
-                    trainingSequences: X.length,
-                    accuracy,
-                    modelState: {
-                        trained: true,
-                        layers: this.model.layers.length,
-                        optimizer: this.model.optimizer.constructor.name
-                    },
-                    log: this.debugLog
-                }
+                confidence: result.confidence,
+                probabilities: result.probabilities,
+                debug: this.debugLog
             };
 
         } catch (error) {
@@ -328,34 +295,8 @@ class LSTMAnalysis extends AnalysisTool {
 
     // Check if model needs retraining
     needsRetraining(symbols) {
-        if (!this.lastTrainingLength) {
-            this.lastTrainingLength = symbols.length;
-            return true;
-        }
-
-        // Retrain if we have 20% more data
-        const dataIncrease = (symbols.length - this.lastTrainingLength) / this.lastTrainingLength;
-        if (dataIncrease > 0.2) {
-            console.log('[LSTM] Retraining due to data increase:', {
-                oldLength: this.lastTrainingLength,
-                newLength: symbols.length,
-                increase: (dataIncrease * 100).toFixed(1) + '%'
-            });
-            this.lastTrainingLength = symbols.length;
-            return true;
-        }
-
-        // Retrain if accuracy is low
-        const accuracy = this.getAccuracy();
-        if (accuracy < 0.3 && symbols.length > this.minSamples * 2) {
-            console.log('[LSTM] Retraining due to low accuracy:', {
-                currentAccuracy: accuracy,
-                threshold: 0.3
-            });
-            return true;
-        }
-
-        return false;
+        if (!this.lastTrainingLength) return true;
+        return symbols.length >= this.lastTrainingLength * 1.5;
     }
 }
 

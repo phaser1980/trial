@@ -450,14 +450,41 @@ class ModelManager {
   // Calculate entropy of a sequence
   calculateEntropy(sequence) {
     const frequencies = new Map();
-    sequence.forEach(symbol => {
+    const patterns = new Map();
+    let totalPatterns = 0;
+
+    // Calculate pattern frequencies with sliding window
+    for (let i = 0; i <= sequence.length - 3; i++) {
+      const pattern = sequence.slice(i, i + 3).join(',');
+      patterns.set(pattern, (patterns.get(pattern) || 0) + 1);
+      totalPatterns++;
+
+      // Track individual symbol frequencies
+      const symbol = sequence[i];
       frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
+    }
+
+    // Calculate pattern entropy
+    let patternEntropy = 0;
+    patterns.forEach(count => {
+      const probability = count / totalPatterns;
+      patternEntropy -= probability * Math.log2(probability);
     });
 
-    return Array.from(frequencies.values()).reduce((entropy, freq) => {
-      const p = freq / sequence.length;
-      return entropy - p * Math.log2(p);
-    }, 0);
+    // Calculate symbol entropy
+    let symbolEntropy = 0;
+    frequencies.forEach(count => {
+      const probability = count / sequence.length;
+      symbolEntropy -= probability * Math.log2(probability);
+    });
+
+    return {
+      patternEntropy,
+      symbolEntropy,
+      patterns,
+      frequencies,
+      totalPatterns
+    };
   }
 
   // Identify potential RNG seeds based on patterns
@@ -783,7 +810,7 @@ class MonteCarloAnalysis extends AnalysisTool {
   }
 
   calculateFrequencies(symbols) {
-    const freq = { '♠': 0, '♣': 0, '♥': 0, '♦': 0 };
+    const freq = { 0: 0, 1: 0, 2: 0, 3: 0 };
     symbols.forEach(s => freq[s]++);
     const total = symbols.length;
     Object.keys(freq).forEach(k => freq[k] /= total);
@@ -797,7 +824,7 @@ class MonteCarloAnalysis extends AnalysisTool {
       cumulative += prob;
       if (rand <= cumulative) return symbol;
     }
-    return '♠'; // Default fallback
+    return 0; // Default fallback
   }
 
   getMostLikelyOutcome(predictions) {
@@ -871,22 +898,15 @@ class LSTMAnalysis extends AnalysisTool {
     this.minTrainingSize = 100; 
     this.outputSize = 4;
     this.initialized = false;
-    this.lastPrediction = null;
-    this.modelState = null;
-    this.debugLog = [];
     this.tf = require('@tensorflow/tfjs');
-
-    this.symbolMap = {
-      '♠': 0, '♣': 1, '♥': 2, '♦': 3
-    };
-    this.reverseSymbolMap = Object.fromEntries(
-      Object.entries(this.symbolMap).map(([k, v]) => [v, k])
-    );
+    this.debugLog = [];
+    this.tensors = new Set();
+    this.lastTrainingLength = null;
   }
 
   preprocessInput(sequence) {
-    const numericalData = sequence.map(symbol => this.symbolMap[symbol] || 0);
-    const normalizedData = numericalData.map(val => val / (Object.keys(this.symbolMap).length - 1));
+    const numericalData = sequence.map(symbol => symbol);
+    const normalizedData = numericalData.map(val => val / (this.outputSize - 1));
     return this.tf.tensor3d([normalizedData.map(val => [val])]);
   }
 
@@ -937,7 +957,7 @@ class LSTMAnalysis extends AnalysisTool {
       const confidence = prediction.dataSync()[predIndex];
 
       return {
-        prediction: this.reverseSymbolMap[predIndex],
+        prediction: predIndex,
         confidence: confidence
       };
     } catch (error) {
@@ -955,8 +975,8 @@ class LSTMAnalysis extends AnalysisTool {
       this.isTraining = true;
       await this.initializeModel();
 
-      const numericalData = symbols.map(symbol => this.symbolMap[symbol] || 0);
-      const normalizedData = numericalData.map(val => val / (Object.keys(this.symbolMap).length - 1));
+      const numericalData = symbols.map(symbol => symbol);
+      const normalizedData = numericalData.map(val => val / (this.outputSize - 1));
       const { sequences, targets } = this.createSequences(normalizedData);
 
       await this.model.fit(sequences, targets, {
@@ -983,11 +1003,10 @@ class LSTMAnalysis extends AnalysisTool {
 
     for (let i = 0; i <= data.length - this.sequenceLength - 1; i++) {
       const sequence = data.slice(i, i + this.sequenceLength).map(val => [val]);
-      const target = data[i + this.sequenceLength];
       sequences.push(sequence);
       
       const oneHot = Array(this.outputSize).fill(0);
-      oneHot[Math.floor(target * (this.outputSize - 1) + 0.5)] = 1;
+      oneHot[Math.floor(data[i + this.sequenceLength] * (this.outputSize - 1) + 0.5)] = 1;
       targets.push(oneHot);
     }
 
@@ -1046,7 +1065,7 @@ class ChiSquareTest extends AnalysisTool {
     this.minSamples = 50;
     this.significanceLevel = 0.05;
     this.expectedFrequencies = {
-      '♠': 0.25, '♣': 0.25, '♥': 0.25, '♦': 0.25
+      0: 0.25, 1: 0.25, 2: 0.25, 3: 0.25
     };
   }
 
@@ -1094,58 +1113,21 @@ class ChiSquareTest extends AnalysisTool {
       let currentObserved = observed[symbol] || 0;
       let deviation = (currentObserved - expected) / expected;
       deviations[symbol] = deviation;
-
-      if (Math.abs(deviation) > Math.abs(maxDeviation)) {
+      
+      if (deviation > maxDeviation) {
         maxDeviation = deviation;
-        predictedSymbol = deviation < 0 ? parseInt(symbol) : null;
+        predictedSymbol = parseInt(symbol);
       }
     }
 
-    // If no symbol is underrepresented, pick the least overrepresented one
-    if (!predictedSymbol) {
-      maxDeviation = Infinity;
-      for (let symbol in this.expectedFrequencies) {
-        if (deviations[symbol] > 0 && deviations[symbol] < maxDeviation) {
-          maxDeviation = deviations[symbol];
-          predictedSymbol = parseInt(symbol);
-        }
-      }
-    }
+    // Calculate confidence based on chi-square test result
+    let confidence = Math.min(0.95, Math.max(0.25, 1 - (chiSquare / (criticalValue * 2))));
 
-    // Calculate confidence based on multiple factors
-    let confidence;
-    
-    // 1. Chi-square factor (inverse relationship - lower chi-square = higher confidence)
-    const chiSquareFactor = Math.max(0, 1 - (chiSquare / (3 * criticalValue)));
-    
-    // 2. Deviation strength factor
-    const deviationFactor = Math.min(0.95, Math.abs(maxDeviation));
-    
-    // 3. Sample size factor
-    const sampleSizeFactor = Math.min(1, symbols.length / (2 * this.minSamples));
-    
-    // Combine factors with weights
-    confidence = (0.4 * chiSquareFactor + 0.4 * deviationFactor + 0.2 * sampleSizeFactor);
-    
-    // Adjust confidence based on chi-square test result
-    if (chiSquare < criticalValue) {
-      // Data appears random, reduce confidence
-      confidence = Math.min(confidence, 0.4);
-    }
-    
-    // Ensure confidence stays within bounds
-    confidence = Math.max(0.25, Math.min(0.95, confidence));
-
-    // If chi-square is very high, further reduce confidence
-    if (chiSquare > 2 * criticalValue) {
-      confidence = Math.min(confidence, 0.3);
-    }
-
-    this.lastPrediction = predictedSymbol;
     return {
       prediction: predictedSymbol,
       confidence: confidence,
-      message: `Chi-square statistic: ${chiSquare.toFixed(2)}`
+      chiSquare: chiSquare,
+      deviations: deviations
     };
   }
 }
@@ -1156,7 +1138,7 @@ class HMMAnalysis extends AnalysisTool {
     super('HMM Analysis');
     this.minSequenceLength = 200; 
     this.numStates = 8;
-    this.symbols = ['♠', '♣', '♥', '♦'];
+    this.symbols = [0, 1, 2, 3];
     this.states = Array.from({length: this.numStates}, (_, i) => `s${i}`);
     this.initialized = false;
     

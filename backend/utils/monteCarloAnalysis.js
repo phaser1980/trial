@@ -32,7 +32,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             const current = pattern[pattern.length - 2];
             const next = pattern[pattern.length - 1];
             
-            if (current < 0 || current > this.numSymbols - 1 || next < 0 || next > this.numSymbols - 1) {
+            if (current < 0 || current >= this.numSymbols || next < 0 || next >= this.numSymbols) {
                 continue;
             }
             
@@ -53,12 +53,10 @@ class MonteCarloAnalysis extends AnalysisTool {
             const totalCount = counts[from];
             const smoothingFactor = Math.max(0.1, Math.min(1, totalCount / 100));
             
-            if (totalCount === 0) {
-                for (const to in matrix[from]) {
+            for (const to in matrix[from]) {
+                if (totalCount === 0) {
                     matrix[from][to] = 1 / this.numSymbols;
-                }
-            } else {
-                for (const to in matrix[from]) {
+                } else {
                     // Apply adaptive smoothing
                     const rawProb = matrix[from][to] / totalCount;
                     matrix[from][to] = (rawProb * smoothingFactor) + ((1 / this.numSymbols) * (1 - smoothingFactor));
@@ -82,13 +80,6 @@ class MonteCarloAnalysis extends AnalysisTool {
                 return null;
             }
             
-            // Validate probabilities
-            const sum = Object.values(probabilities).reduce((a, b) => a + b, 0);
-            if (Math.abs(sum - 1) > 0.0001) {
-                console.error('[Monte Carlo] Invalid probability distribution:', { current, sum, probabilities });
-                return null;
-            }
-            
             // Generate next symbol based on probabilities
             const rand = Math.random();
             let cumProb = 0;
@@ -103,8 +94,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             }
             
             if (nextSymbol === null) {
-                console.error('[Monte Carlo] Failed to select next symbol:', { rand, cumProb, probabilities });
-                return null;
+                nextSymbol = this.numSymbols - 1; // Default to last symbol if something goes wrong
             }
             
             sequence.push(nextSymbol);
@@ -135,7 +125,7 @@ class MonteCarloAnalysis extends AnalysisTool {
         const patterns = new Map();
 
         for (let i = 0; i <= symbols.length - patternLength; i++) {
-            const pattern = symbols.slice(i, i + patternLength).join('');
+            const pattern = symbols.slice(i, i + patternLength).join(',');
             if (!patterns.has(pattern)) {
                 patterns.set(pattern, { count: 0, positions: [] });
             }
@@ -169,7 +159,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             const transitionMatrix = this.calculateTransitionMatrix(symbols);
             const recentPattern = symbols.slice(-this.patternLength);
             
-            // Run simulations with pattern matching
+            // Run simulations
             const predictions = new Array(this.numSymbols).fill(0);
             let validSimulations = 0;
             let maxPatternMatch = 0;
@@ -196,31 +186,42 @@ class MonteCarloAnalysis extends AnalysisTool {
                 };
             }
 
-            // Find most likely prediction
-            let maxCount = 0;
-            let prediction = null;
-            let secondMaxCount = 0;
+            // Calculate prediction probabilities
+            const probabilities = predictions.map(count => count / validSimulations);
+            const maxProb = Math.max(...probabilities);
+            const prediction = probabilities.indexOf(maxProb);
 
-            predictions.forEach((count, symbol) => {
-                if (count > maxCount) {
-                    secondMaxCount = maxCount;
-                    maxCount = count;
-                    prediction = symbol;
-                } else if (count > secondMaxCount) {
-                    secondMaxCount = count;
-                }
-            });
+            // Handle NaN values
+            if (isNaN(maxProb) || isNaN(prediction)) {
+                console.error('[Monte Carlo] NaN values detected in prediction');
+                return {
+                    prediction: null,
+                    confidence: 0,
+                    message: 'Invalid prediction values',
+                    debug: this.debugLog
+                };
+            }
 
-            // Calculate confidence based on simulation distribution and pattern matches
-            const distributionConfidence = (maxCount - secondMaxCount) / validSimulations;
-            const patternConfidence = maxPatternMatch / this.minSamples;
-            const confidence = Math.min(1, Math.max(0, 
-                (distributionConfidence * 0.6) + (patternConfidence * 0.4)
+            // Calculate entropy-based confidence
+            const entropy = -probabilities.reduce((sum, p) => {
+                if (p <= 0) return sum;
+                return sum + (p * Math.log2(p));
+            }, 0);
+            const normalizedEntropy = entropy / Math.log2(this.numSymbols);
+            const entropyConfidence = 1 - normalizedEntropy;
+
+            // Calculate pattern confidence
+            const patternConfidence = Math.min(0.95, maxPatternMatch / (symbols.length / 10));
+
+            // Combine confidence metrics with weighted average
+            const confidence = Math.min(0.95, Math.max(0.25,
+                (maxProb * 0.4) + (entropyConfidence * 0.4) + (patternConfidence * 0.2)
             ));
 
             return {
-                prediction: prediction,
-                confidence: confidence,
+                prediction,
+                confidence,
+                probabilities,
                 debug: this.debugLog
             };
 
