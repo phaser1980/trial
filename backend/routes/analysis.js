@@ -6,6 +6,7 @@ const PredictionTracker = require('../utils/predictionTracker');
 const { HybridModel, ErrorCorrection } = require('../utils/hybridModel');
 const ARIMAAnalysis = require('../utils/arimaAnalysis');
 const AnalysisTool = require('../utils/AnalysisTool');
+const logger = require('../utils/logger');
 
 // Initialize prediction tracker and hybrid model
 const predictionTracker = new PredictionTracker();
@@ -1276,7 +1277,7 @@ router.get('/', async (req, res) => {
     const symbols = result.rows.map(row => row.symbol);
     const latestSequenceId = result.rows[result.rows.length - 1]?.id;
     
-    console.log(`Analyzing ${symbols.length} symbols`);
+    logger.info(`Analyzing ${symbols.length} symbols`);
 
     if (symbols.length < 2) {
       return res.json({
@@ -1293,7 +1294,7 @@ router.get('/', async (req, res) => {
 
     for (const [name, tool] of Object.entries(analysisTools)) {
       try {
-        console.log(`Running ${name} analysis...`);
+        logger.info(`Running ${name} analysis...`);
         const startTime = Date.now();
         
         const result = await tool.analyze(symbols);
@@ -1319,10 +1320,10 @@ router.get('/', async (req, res) => {
           modelState: tool.modelState || null
         };
         
-        console.log(`${name} analysis completed in ${endTime - startTime}ms`);
+        logger.info(`${name} analysis completed in ${endTime - startTime}ms`);
         
       } catch (error) {
-        console.error(`Error in ${name} analysis:`, error);
+        logger.error(`Error in ${name} analysis:`, { error });
         analyses[name] = {
           prediction: null,
           confidence: 0,
@@ -1402,7 +1403,7 @@ router.get('/', async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Analysis error:', error);
+    logger.error('Analysis error:', { error });
     res.status(500).json({ 
       error: 'Analysis failed',
       details: error.message,
@@ -1419,9 +1420,11 @@ router.post('/feedback', async (req, res) => {
   try {
     const { actual } = req.body;
     if (actual === undefined) {
+      logger.warn('Feedback received without actual value');
       return res.status(400).json({ error: 'Missing actual value' });
     }
 
+    logger.info('Processing feedback', { actual });
     await client.query('BEGIN');
 
     // Update was_correct for recent predictions
@@ -1429,6 +1432,7 @@ router.post('/feedback', async (req, res) => {
 
     // Calculate and store performance metrics for each model
     for (const modelName of [...Object.keys(analysisTools), 'hybrid']) {
+      logger.debug('Calculating metrics for model', { modelName });
       const metrics = await db.getModelAccuracy(client, modelName, '1 hour');
       await db.storeModelPerformance(client, modelName, metrics);
     }
@@ -1437,6 +1441,7 @@ router.post('/feedback', async (req, res) => {
     
     // Update models in memory
     hybridModel.updateModels(actual);
+    logger.info('Feedback processed successfully', { actual });
     
     res.json({ 
       success: true,
@@ -1444,8 +1449,11 @@ router.post('/feedback', async (req, res) => {
     });
 
   } catch (error) {
+    logger.error('Error processing feedback', { 
+      error,
+      requestBody: req.body 
+    });
     await client.query('ROLLBACK');
-    console.error('Feedback error:', error);
     res.status(500).json({ 
       error: 'Failed to process feedback',
       details: error.message 
@@ -1459,10 +1467,16 @@ router.post('/feedback', async (req, res) => {
 router.get('/performance', async (req, res) => {
   const client = await db.getClient();
   try {
+    logger.debug('Fetching performance metrics');
     const [overall, recent] = await Promise.all([
       db.getModelPerformance(client, null, 100),  // Last 100 records
       db.getModelAccuracy(client, null, '1 hour')  // Last hour
     ]);
+    
+    logger.debug('Performance metrics retrieved', {
+      overallCount: overall.length,
+      recentCount: recent.length
+    });
     
     res.json({
       overall_performance: overall,
@@ -1471,7 +1485,7 @@ router.get('/performance', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error fetching performance metrics:', error);
+    logger.error('Error fetching performance metrics', { error });
     res.status(500).json({ 
       error: 'Failed to fetch performance metrics',
       details: error.message 

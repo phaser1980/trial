@@ -1,0 +1,16 @@
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:07:16.450Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:07:16.650Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-01T07:07:16.651Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:07:16.652Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:07:16.652Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-01T07:07:16.654Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-01T07:07:16.659Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-01T07:07:16.665Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:07:45.462Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:07:45.676Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-01T07:07:45.677Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:07:45.678Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:07:45.678Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-01T07:07:45.680Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-01T07:07:45.686Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-01T07:07:45.691Z"}
