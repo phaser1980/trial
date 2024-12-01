@@ -362,7 +362,7 @@ class EntropyAnalysis extends AnalysisTool {
     const recentWindow = symbols.slice(-this.windowSize);
     const entropy = this.calculateEntropy(recentWindow);
     
-    // Simple prediction based on most frequent symbol
+    // Calculate frequencies and prediction
     const frequencies = {};
     recentWindow.forEach(symbol => {
       frequencies[symbol] = (frequencies[symbol] || 0) + 1;
@@ -373,13 +373,30 @@ class EntropyAnalysis extends AnalysisTool {
     Object.entries(frequencies).forEach(([symbol, count]) => {
       if (count > maxCount) {
         maxCount = count;
-        prediction = symbol;
+        prediction = parseInt(symbol);
       }
     });
 
-    const confidence = maxCount / this.windowSize;
-    this.lastPrediction = prediction;
+    // Calculate base confidence from frequency
+    let baseConfidence = maxCount / this.windowSize;
     
+    // Adjust confidence based on entropy
+    // Lower entropy = higher confidence
+    const maxEntropy = Math.log2(Object.keys(frequencies).length); // Maximum possible entropy
+    const entropyFactor = Math.max(0, 1 - (entropy / maxEntropy));
+    
+    // Combine frequency and entropy factors
+    let confidence = 0.4 * baseConfidence + 0.6 * entropyFactor;
+    
+    // Adjust for minimum confidence threshold
+    confidence = Math.max(0.25, Math.min(0.95, confidence));
+    
+    // If entropy is very high (close to max), reduce confidence
+    if (entropy > 0.9 * maxEntropy) {
+      confidence = Math.min(confidence, 0.4);
+    }
+
+    this.lastPrediction = prediction;
     return { entropy, prediction, confidence };
   }
 }
@@ -685,7 +702,7 @@ class ChiSquareTest extends AnalysisTool {
       };
     }
 
-    // Calculate observed frequencies first
+    // Calculate observed frequencies
     let observed = {};
     symbols.forEach(symbol => {
       observed[symbol] = (observed[symbol] || 0) + 1;
@@ -693,23 +710,24 @@ class ChiSquareTest extends AnalysisTool {
 
     // Calculate chi-square statistic
     let chiSquare = this.calculateChiSquare(observed);
-
-    let criticalValue = 7.815;
+    let criticalValue = 7.815; // Critical value for df=3, p=0.05
 
     // Calculate prediction based on deviation from expected
     let totalObserved = symbols.length;
     let maxDeviation = -Infinity;
     let predictedSymbol = null;
+    let deviations = {};
 
+    // Calculate deviations for all symbols
     for (let symbol in this.expectedFrequencies) {
       let expected = totalObserved * this.expectedFrequencies[symbol];
       let currentObserved = observed[symbol] || 0;
       let deviation = (currentObserved - expected) / expected;
+      deviations[symbol] = deviation;
 
       if (Math.abs(deviation) > Math.abs(maxDeviation)) {
         maxDeviation = deviation;
-        // Predict the symbol that is most underrepresented (negative deviation)
-        predictedSymbol = deviation < 0 ? symbol : null;
+        predictedSymbol = deviation < 0 ? parseInt(symbol) : null;
       }
     }
 
@@ -717,28 +735,40 @@ class ChiSquareTest extends AnalysisTool {
     if (!predictedSymbol) {
       maxDeviation = Infinity;
       for (let symbol in this.expectedFrequencies) {
-        let expected = totalObserved * this.expectedFrequencies[symbol];
-        let currentObserved = observed[symbol] || 0;
-        let deviation = (currentObserved - expected) / expected;
-        if (deviation > 0 && deviation < maxDeviation) {
-          maxDeviation = deviation;
-          predictedSymbol = symbol;
+        if (deviations[symbol] > 0 && deviations[symbol] < maxDeviation) {
+          maxDeviation = deviations[symbol];
+          predictedSymbol = parseInt(symbol);
         }
       }
     }
 
-    // Calculate confidence based on chi-square value
-    let confidence = Math.min(0.95, chiSquare / (2 * criticalValue));
+    // Calculate confidence based on multiple factors
+    let confidence;
+    
+    // 1. Chi-square factor (inverse relationship - lower chi-square = higher confidence)
+    const chiSquareFactor = Math.max(0, 1 - (chiSquare / (3 * criticalValue)));
+    
+    // 2. Deviation strength factor
+    const deviationFactor = Math.min(0.95, Math.abs(maxDeviation));
+    
+    // 3. Sample size factor
+    const sampleSizeFactor = Math.min(1, symbols.length / (2 * this.minSamples));
+    
+    // Combine factors with weights
+    confidence = (0.4 * chiSquareFactor + 0.4 * deviationFactor + 0.2 * sampleSizeFactor);
+    
+    // Adjust confidence based on chi-square test result
+    if (chiSquare < criticalValue) {
+      // Data appears random, reduce confidence
+      confidence = Math.min(confidence, 0.4);
+    }
+    
+    // Ensure confidence stays within bounds
+    confidence = Math.max(0.25, Math.min(0.95, confidence));
 
-    // If we still don't have a prediction, pick the least frequent symbol
-    if (!predictedSymbol) {
-      let minCount = Infinity;
-      for (let symbol in observed) {
-        if (observed[symbol] < minCount) {
-          minCount = observed[symbol];
-          predictedSymbol = symbol;
-        }
-      }
+    // If chi-square is very high, further reduce confidence
+    if (chiSquare > 2 * criticalValue) {
+      confidence = Math.min(confidence, 0.3);
     }
 
     this.lastPrediction = predictedSymbol;

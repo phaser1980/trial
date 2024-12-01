@@ -38,14 +38,28 @@ class PredictionTracker {
             return;
         }
 
+        // Convert prediction and actual to numbers for comparison
+        const predictionNum = Number(prediction);
+        const actualNum = Number(actual);
+
+        if (isNaN(predictionNum) || isNaN(actualNum)) {
+            console.log(`[PredictionTracker] Invalid prediction or actual value for ${modelName}:`, {
+                prediction,
+                actual,
+                predictionNum,
+                actualNum
+            });
+            return;
+        }
+
         if (confidence < 0 || confidence > 1) {
             console.log(`[PredictionTracker] Invalid confidence value for ${modelName}: ${confidence}`);
             confidence = Math.max(0, Math.min(1, confidence));
         }
 
         // Add new prediction
-        history.predictions.push(prediction);
-        history.actuals.push(actual);
+        history.predictions.push(predictionNum);
+        history.actuals.push(actualNum);
         history.confidences.push(confidence);
 
         // Maintain window size
@@ -59,7 +73,10 @@ class PredictionTracker {
         const newAccuracy = this.updateAccuracy(modelName);
         console.log(`[PredictionTracker] Updated ${modelName} accuracy:`, {
             newAccuracy,
-            totalPredictions: history.predictions.length
+            totalPredictions: history.predictions.length,
+            lastPrediction: predictionNum,
+            lastActual: actualNum,
+            wasCorrect: predictionNum === actualNum
         });
         
         // Update calibration
@@ -72,13 +89,22 @@ class PredictionTracker {
         const correct = history.predictions.reduce((sum, pred, i) => 
             sum + (pred === history.actuals[i] ? 1 : 0), 0);
         
-        const accuracy = correct / history.predictions.length;
+        const accuracy = history.predictions.length > 0 ? correct / history.predictions.length : 0;
         history.accuracyOverTime.push(accuracy);
 
         // Maintain window size for accuracy history
         if (history.accuracyOverTime.length > this.historyWindow) {
             history.accuracyOverTime.shift();
         }
+
+        console.log(`[PredictionTracker] ${modelName} accuracy details:`, {
+            correct,
+            total: history.predictions.length,
+            accuracy,
+            recentPredictions: history.predictions.slice(-5),
+            recentActuals: history.actuals.slice(-5)
+        });
+
         return accuracy;
     }
 
@@ -95,15 +121,25 @@ class PredictionTracker {
         if (recentPredictions.length < recentWindow) return;
 
         // Calculate actual accuracy vs average confidence
-        const recentAccuracy = recentPredictions.reduce((sum, pred, i) => 
-            sum + (pred === recentActuals[i] ? 1 : 0), 0) / recentWindow;
+        const recentCorrect = recentPredictions.reduce((sum, pred, i) => 
+            sum + (pred === recentActuals[i] ? 1 : 0), 0);
+        const recentAccuracy = recentCorrect / recentWindow;
         const avgConfidence = recentConfidences.reduce((sum, conf) => sum + conf, 0) / recentWindow;
 
-        // Adjust calibration factor
-        if (avgConfidence > 0) {
-            const newCalibration = recentAccuracy / avgConfidence;
-            history.calibrationFactor = 0.7 * history.calibrationFactor + 0.3 * newCalibration;
-        }
+        // Calculate overconfidence penalty
+        const overconfidencePenalty = Math.max(0, avgConfidence - recentAccuracy);
+        
+        // Adjust calibration factor more aggressively for overconfident models
+        const newCalibration = recentAccuracy / (avgConfidence + overconfidencePenalty);
+        history.calibrationFactor = 0.7 * history.calibrationFactor + 0.3 * newCalibration;
+
+        console.log(`[PredictionTracker] ${modelName} calibration update:`, {
+            recentAccuracy,
+            avgConfidence,
+            overconfidencePenalty,
+            newCalibration,
+            finalCalibrationFactor: history.calibrationFactor
+        });
     }
 
     // Get calibrated confidence for a model

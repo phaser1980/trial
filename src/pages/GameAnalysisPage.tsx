@@ -488,14 +488,14 @@ const GameAnalysisPage: React.FC = () => {
                         </Typography>
                         <Typography variant="body1">
                           Next: <strong>
-                            {data?.predictedNext !== undefined ? 
+                            {data?.predictedNext !== undefined && data?.predictedNext !== null ? 
                               symbols[data.predictedNext] : 
-                              'N/A'
+                              'Test'
                             }
                           </strong>
                         </Typography>
                         <Typography variant="caption" display="block" color="text.secondary">
-                          Conf: {data?.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'N/A'}
+                          Conf: {data?.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'Test'}
                         </Typography>
                         {data?.type === 'arima' && data?.params && (
                           <>
