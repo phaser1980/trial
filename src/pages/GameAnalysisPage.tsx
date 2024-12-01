@@ -222,9 +222,28 @@ function transformAnalysisData(backendData: BackendAnalysis | null): AnalysisDat
   };
 }
 
+// Model performance tracking interface
+interface ModelPerformance {
+  accuracy: number;
+  confidence: number;
+  totalPredictions: number;
+  correctPredictions: number;
+  lastPrediction?: number;
+  lastActual?: number;
+  wasCorrect?: boolean;
+}
+
+interface ModelState {
+  performance: ModelPerformance;
+  needsRetraining: boolean;
+  lastTrainingTime?: string;
+  error?: string;
+}
+
 const GameAnalysisPage: React.FC = () => {
   const [sequence, setSequence] = useState<SequenceItem[]>([]);
   const [analysisData, setAnalysisData] = useState<AnalysisData>({});
+  const [modelStates, setModelStates] = useState<Record<string, ModelState>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
 
@@ -322,31 +341,160 @@ const GameAnalysisPage: React.FC = () => {
     }
   };
 
-  const renderAnalysisValue = (name: string, data: any) => {
-    if (!data) return 'No Data Available';
+  const renderModelBox = (name: string, data: any, performance?: ModelPerformance) => {
+    const getAccuracyColor = (accuracy: number) => {
+      if (accuracy >= 0.7) return 'success.main';
+      if (accuracy >= 0.5) return 'warning.main';
+      return 'error.main';
+    };
 
-    // Show matrix size for Markov Chain
-    if (name === 'Markov' && data.matrix) {
-      return `Matrix: ${data.matrix.length}x${data.matrix[0]?.length ?? 0}`;
-    }
+    const getConfidenceIndicator = (confidence: number) => {
+      const bars = Math.floor(confidence * 5);
+      return Array(5).fill('▢').map((char, i) => 
+        i < bars ? '▣' : char
+      ).join('');
+    };
 
-    // Show values for other analysis types
-    if (data.value !== undefined) {
-      return `Value: ${data.value.toFixed(3)}`;
-    }
+    return (
+      <Paper 
+        elevation={3} 
+        sx={{ 
+          p: 2,
+          height: '100%',
+          backgroundColor: data.type === 'lstm' && (data as any).isTraining ? 
+            'rgba(25, 118, 210, 0.04)' : 'background.paper',
+          border: '1px solid',
+          borderColor: performance?.wasCorrect ? 'success.light' : 
+            performance?.wasCorrect === false ? 'error.light' : 'divider'
+        }}
+      >
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+          <Typography variant="h6" component="h3">
+            {name}
+          </Typography>
+          {performance && (
+            <Typography 
+              variant="body2" 
+              sx={{ 
+                color: getAccuracyColor(performance.accuracy),
+                fontWeight: 'bold'
+              }}
+            >
+              {(performance.accuracy * 100).toFixed(1)}%
+            </Typography>
+          )}
+        </Box>
 
-    return 'N/A';
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="body1" sx={{ mb: 0.5 }}>
+            Prediction: <strong>{
+              data.predictedNext !== undefined ? symbols[data.predictedNext] : '?'
+            }</strong>
+          </Typography>
+          <Typography 
+            variant="caption" 
+            sx={{ 
+              display: 'block',
+              fontFamily: 'monospace',
+              color: data.confidence > 0.7 ? 'success.main' : 
+                data.confidence > 0.4 ? 'warning.main' : 'text.secondary'
+            }}
+          >
+            Confidence: {getConfidenceIndicator(data.confidence)}
+            {' '}({(data.confidence * 100).toFixed(0)}%)
+          </Typography>
+        </Box>
+
+        {/* Model-specific details */}
+        {data.type === 'markov' && data.matrix && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Matrix: {data.matrix.length}x{data.matrix[0]?.length}
+            </Typography>
+          </Box>
+        )}
+
+        {data.type === 'lstm' && (
+          <Box sx={{ mt: 1 }}>
+            {(data as any).isTraining ? (
+              <Typography variant="body2" color="primary.main">
+                Training in progress...
+              </Typography>
+            ) : (
+              (data as any).probabilities && (
+                <Box sx={{ 
+                  mt: 1, 
+                  p: 1, 
+                  bgcolor: 'background.default',
+                  borderRadius: 1,
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem'
+                }}>
+                  {symbols.map((s, i) => (
+                    <div key={i}>
+                      {s}: {((data as any).probabilities[i] * 100).toFixed(1)}%
+                    </div>
+                  ))}
+                </Box>
+              )
+            )}
+          </Box>
+        )}
+
+        {data.type === 'arima' && (data as any).params && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+              AR: [{(data as any).params.ar.map((v: number) => v.toFixed(2)).join(', ')}]
+              <br/>
+              MA: [{(data as any).params.ma.map((v: number) => v.toFixed(2)).join(', ')}]
+            </Typography>
+          </Box>
+        )}
+
+        {data.type === 'hmm' && (data as any).stateSequence && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+              States: {(data as any).stateSequence.slice(-3).join(' → ')}
+            </Typography>
+          </Box>
+        )}
+
+        {/* Performance metrics */}
+        {performance && (
+          <Box 
+            sx={{ 
+              mt: 2,
+              pt: 1,
+              borderTop: '1px solid',
+              borderColor: 'divider'
+            }}
+          >
+            <Typography variant="caption" display="block" color="text.secondary">
+              Total Predictions: {performance.totalPredictions}
+            </Typography>
+            <Typography variant="caption" display="block" color="text.secondary">
+              Correct: {performance.correctPredictions}
+            </Typography>
+            {performance.lastPrediction !== undefined && (
+              <Typography 
+                variant="caption" 
+                display="block" 
+                sx={{ 
+                  color: performance.wasCorrect ? 'success.main' : 'error.main',
+                  fontWeight: 'medium'
+                }}
+              >
+                Last: {symbols[performance.lastPrediction]} → {
+                  performance.lastActual !== undefined ? 
+                    symbols[performance.lastActual] : '?'
+                }
+              </Typography>
+            )}
+          </Box>
+        )}
+      </Paper>
+    );
   };
-
-  // Helper type for analysis data
-  type AnalysisType = 
-    | { type: 'markov'; matrix?: number[][]; predictedNext?: number; confidence: number; }
-    | { type: 'entropy'; value?: number; predictedNext?: number; confidence: number; }
-    | { type: 'chiSquare'; value?: number; predictedNext?: number; confidence: number; }
-    | { type: 'monteCarlo'; predictedNext?: number; confidence: number; }
-    | { type: 'arima'; predictedNext?: number; confidence: number; params?: { ar: number[]; d: number; ma: number[]; }; error?: string; }
-    | { type: 'lstm'; predictedNext?: number; confidence: number; probabilities?: number[]; isTraining?: boolean; }
-    | { type: 'hmm'; predictedNext?: number; confidence: number; stateSequence?: number[]; };
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
@@ -424,164 +572,55 @@ const GameAnalysisPage: React.FC = () => {
         </Grid>
 
         {/* Analysis Results */}
-        <Grid item xs={12} md={5}>
-          <Paper elevation={3} sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Analysis Results
-            </Typography>
-            {loading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                <CircularProgress />
-              </Box>
-            ) : (
+        <Grid item xs={12} md={8}>
+          <Grid container spacing={2}>
+            {/* Basic Models (Always Show) */}
+            <Grid item xs={12}>
+              <Typography variant="h6" gutterBottom>
+                Basic Analysis Models
+              </Typography>
               <Grid container spacing={2}>
                 {Object.entries({
-                  // Always show basic models
-                  'Markov': { type: 'markov', ...analysisData.markovChain },
+                  'Markov Chain': { type: 'markov', ...analysisData.markovChain },
                   'Entropy': { type: 'entropy', ...analysisData.entropy },
-                  'Chi²': { type: 'chiSquare', ...analysisData.chiSquare },
-                  // Show Monte Carlo after 100 symbols
-                  ...(sequence.length >= 100 ? {
-                    'Monte Carlo': { type: 'monteCarlo', ...analysisData.monteCarlo }
-                  } : {}),
-                  // Show ARIMA after 150 symbols
-                  ...(sequence.length >= 150 ? {
-                    'ARIMA': { type: 'arima', ...analysisData.arima }
-                  } : {}),
-                  // Show LSTM after 200 symbols
-                  ...(sequence.length >= 200 ? {
-                    'LSTM': { type: 'lstm', ...analysisData.lstm }
-                  } : {}),
-                  // Show HMM after 300 symbols
-                  ...(sequence.length >= 300 ? {
-                    'HMM': { type: 'hmm', ...analysisData.hmm }
-                  } : {})
-                } as Record<string, AnalysisType>).map(([name, data]) => (
-                  data && (
-                    <Grid item xs={8} key={name}>
-                      <Paper 
-                        elevation={1} 
-                        sx={{ 
-                          p: 2, 
-                          height: '100%',
-                          backgroundColor: loading ? 'action.disabledBackground' : 
-                            name === 'ARIMA' ? 'rgba(25, 118, 210, 0.04)' : 'background.paper',
-                          border: name === 'ARIMA' ? '1px solid rgba(25, 118, 210, 0.25)' : 'none'
-                        }}
-                      >
-                        <Typography variant="h6" component="h3" 
-                          sx={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: 1,
-                            color: name === 'ARIMA' ? 'primary.main' : 'text.primary'
-                          }}
-                        >
-                          {name}
-                          {data?.type === 'arima' && data?.error && (
-                            <Tooltip title={data.error}>
-                              <IconButton size="small" color="warning">
-                                <InfoIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                        </Typography>
-                        <Typography variant="body1">
-                          Next: <strong>
-                            {data?.predictedNext !== undefined && data?.predictedNext !== null ? 
-                              symbols[data.predictedNext] : 
-                              'Test'
-                            }
-                          </strong>
-                        </Typography>
-                        <Typography variant="caption" display="block" color="text.secondary">
-                          Conf: {data?.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'Test'}
-                        </Typography>
-                        {data?.type === 'arima' && data?.params && (
-                          <>
-                            <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
-                              Model Parameters:
-                            </Typography>
-                            <Box sx={{ 
-                              mt: 0.5, 
-                              p: 1, 
-                              backgroundColor: 'background.paper',
-                              borderRadius: 1,
-                              fontSize: '0.875rem'
-                            }}>
-                              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                                AR({data.params.ar.length}): [{data.params.ar.map(v => v.toFixed(2)).join(', ')}]
-                                <br />
-                                D: {data.params.d}
-                                <br />
-                                MA({data.params.ma.length}): [{data.params.ma.map(v => v.toFixed(2)).join(', ')}]
-                              </Typography>
-                            </Box>
-                            {data.error && (
-                              <Typography variant="caption" color="warning.main" sx={{ mt: 1, display: 'block' }}>
-                                {data.error}
-                              </Typography>
-                            )}
-                          </>
-                        )}
-                        {data?.type === 'lstm' && (
-                          <>
-                            <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
-                              LSTM State:
-                            </Typography>
-                            <Box sx={{ 
-                              mt: 0.5, 
-                              p: 1, 
-                              backgroundColor: 'background.paper',
-                              borderRadius: 1,
-                              fontSize: '0.875rem'
-                            }}>
-                              {data.isTraining ? (
-                                <Typography variant="body2" color="primary">
-                                  Training in progress...
-                                </Typography>
-                              ) : (
-                                <>
-                                  {data.probabilities && data.probabilities.length > 0 && (
-                                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                                      Probabilities:<br/>
-                                      {data.probabilities.map((p, i) => 
-                                        `${symbols[i]}: ${(p * 100).toFixed(1)}%`
-                                      ).join('\n')}
-                                    </Typography>
-                                  )}
-                                </>
-                              )}
-                            </Box>
-                          </>
-                        )}
-                        {data?.type === 'hmm' && (
-                          <>
-                            <Typography variant="body2" sx={{ mt: 1, fontWeight: 'medium' }}>
-                              HMM State:
-                            </Typography>
-                            <Box sx={{ 
-                              mt: 0.5, 
-                              p: 1, 
-                              backgroundColor: 'background.paper',
-                              borderRadius: 1,
-                              fontSize: '0.875rem'
-                            }}>
-                              {data.stateSequence && data.stateSequence.length > 0 && (
-                                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                                  Last States: {data.stateSequence.slice(-5).join(' → ')}
-                                </Typography>
-                              )}
-                            </Box>
-                          </>
-                        )}
-                      </Paper>
-                    </Grid>
-                  )
+                  'Chi-Square': { type: 'chiSquare', ...analysisData.chiSquare }
+                } as Record<string, any>).map(([name, data]) => (
+                  <Grid item xs={12} sm={6} md={4} key={name}>
+                    {renderModelBox(name, data, modelStates[name]?.performance)}
+                  </Grid>
                 ))}
               </Grid>
+            </Grid>
+
+            {/* Advanced Models (Show based on sequence length) */}
+            {sequence.length >= 100 && (
+              <Grid item xs={12}>
+                <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>
+                  Advanced Analysis Models
+                </Typography>
+                <Grid container spacing={2}>
+                  {Object.entries({
+                    ...(sequence.length >= 100 ? {
+                      'Monte Carlo': { type: 'monteCarlo', ...analysisData.monteCarlo }
+                    } : {}),
+                    ...(sequence.length >= 150 ? {
+                      'ARIMA': { type: 'arima', ...analysisData.arima }
+                    } : {}),
+                    ...(sequence.length >= 200 ? {
+                      'LSTM': { type: 'lstm', ...analysisData.lstm }
+                    } : {}),
+                    ...(sequence.length >= 300 ? {
+                      'HMM': { type: 'hmm', ...analysisData.hmm }
+                    } : {})
+                  } as Record<string, any>).map(([name, data]) => (
+                    <Grid item xs={12} sm={6} md={4} key={name}>
+                      {renderModelBox(name, data, modelStates[name]?.performance)}
+                    </Grid>
+                  ))}
+                </Grid>
+              </Grid>
             )}
-          </Paper>
+          </Grid>
         </Grid>
       </Grid>
     </Container>

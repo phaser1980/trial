@@ -35,42 +35,93 @@ pool.on('error', (err, client) => {
     `);
 
     if (!tableExists.rows[0].exists) {
-      console.log('[DB] Creating sequences table and sequence...');
+      console.log('[DB] Creating database schema...');
 
-      // Create the table and the sequence if they do not exist
+      // Create the tables if they do not exist
       await client.query(`
+        -- Main sequences table
         CREATE TABLE IF NOT EXISTS sequences (
           id SERIAL PRIMARY KEY,
           symbol INTEGER NOT NULL CHECK (symbol >= 0 AND symbol <= 3),
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          batch_id UUID DEFAULT gen_random_uuid(),
+          entropy_value FLOAT,
+          pattern_detected BOOLEAN DEFAULT FALSE
+        );
+
+        -- Model predictions table
+        CREATE TABLE IF NOT EXISTS model_predictions (
+          id SERIAL PRIMARY KEY,
+          sequence_id INTEGER REFERENCES sequences(id),
+          model_name VARCHAR(50) NOT NULL,
+          predicted_symbol INTEGER CHECK (predicted_symbol >= 0 AND predicted_symbol <= 3),
+          confidence FLOAT CHECK (confidence >= 0 AND confidence <= 1),
+          was_correct BOOLEAN,
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE SEQUENCE IF NOT EXISTS sequences_id_seq
-        START WITH 1
-        INCREMENT BY 1
-        OWNED BY sequences.id;
+        -- Model performance metrics
+        CREATE TABLE IF NOT EXISTS model_performance (
+          id SERIAL PRIMARY KEY,
+          model_name VARCHAR(50) NOT NULL,
+          accuracy FLOAT,
+          confidence_calibration FLOAT,
+          sample_size INTEGER,
+          last_retrain_at TIMESTAMP,
+          needs_retraining BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT unique_model_metrics UNIQUE (model_name, created_at)
+        );
 
-        -- Add index on created_at for better query performance
+        -- Entropy tracking
+        CREATE TABLE IF NOT EXISTS entropy_tracking (
+          id SERIAL PRIMARY KEY,
+          batch_id UUID REFERENCES sequences(batch_id),
+          window_size INTEGER,
+          entropy_value FLOAT,
+          chi_square_value FLOAT,
+          pattern_strength FLOAT,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Pattern detection
+        CREATE TABLE IF NOT EXISTS pattern_detection (
+          id SERIAL PRIMARY KEY,
+          batch_id UUID REFERENCES sequences(batch_id),
+          pattern_type VARCHAR(50),
+          confidence FLOAT CHECK (confidence >= 0 AND confidence <= 1),
+          detected_length INTEGER,
+          sample_size INTEGER,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Create indexes for better query performance
         CREATE INDEX IF NOT EXISTS idx_sequences_created_at ON sequences(created_at);
+        CREATE INDEX IF NOT EXISTS idx_sequences_batch_id ON sequences(batch_id);
+        CREATE INDEX IF NOT EXISTS idx_model_predictions_sequence_id ON model_predictions(sequence_id);
+        CREATE INDEX IF NOT EXISTS idx_model_predictions_model_name ON model_predictions(model_name);
+        CREATE INDEX IF NOT EXISTS idx_model_performance_model_name ON model_performance(model_name);
+        CREATE INDEX IF NOT EXISTS idx_entropy_tracking_batch_id ON entropy_tracking(batch_id);
+        CREATE INDEX IF NOT EXISTS idx_pattern_detection_batch_id ON pattern_detection(batch_id);
       `);
 
-      console.log('[DB] Sequences table and sequence created successfully');
+      console.log('[DB] Database schema created successfully');
     } else {
-      console.log('[DB] Sequences table already exists');
+      console.log('[DB] Tables already exist');
       
       // Get current sequence count
       const count = await client.query('SELECT COUNT(*) FROM sequences');
       console.log('[DB] Found existing sequences table with', count.rows[0].count, 'records');
       
       // Log table structure for debugging
-      const columns = await client.query(`
-        SELECT column_name, data_type, column_default, is_nullable
-        FROM information_schema.columns
+      const tables = await client.query(`
+        SELECT table_name 
+        FROM information_schema.tables 
         WHERE table_schema = 'public'
-        AND table_name = 'sequences'
-        ORDER BY ordinal_position;
+        AND table_type = 'BASE TABLE'
+        ORDER BY table_name;
       `);
-      console.log('[DB] Table structure:', columns.rows);
+      console.log('[DB] Available tables:', tables.rows.map(r => r.table_name));
     }
   } catch (err) {
     console.error('[DB] Database initialization error:', err);
