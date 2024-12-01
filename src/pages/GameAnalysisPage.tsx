@@ -1,23 +1,33 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Container,
-  Grid,
+  Box,
   Button,
   Typography,
-  Box,
-  Paper,
-  Alert,
-  CircularProgress,
-  ButtonGroup,
+  Grid,
+  Container,
+  CardContent,
   IconButton,
   Tooltip,
   Card,
   LinearProgress,
   Switch,
-  Chip
+  Chip,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  List,
+  ListItem,
+  ListItemText,
+  Paper,
+  Alert,
+  AlertTitle,
+  CircularProgress,
+  ButtonGroup
 } from '@mui/material';
 import UndoIcon from '@mui/icons-material/Undo';
 import InfoIcon from '@mui/icons-material/Info';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CloseIcon from '@mui/icons-material/Close';
 import { v4 as uuidv4 } from 'uuid';
 
 interface SequenceItem {
@@ -123,6 +133,21 @@ interface HMMAnalysis extends BaseAnalysis {
   stateSequence?: number[];
 }
 
+interface RNGAnalysis extends BaseAnalysis {
+  debug?: {
+    hasPotentialRNG: boolean;
+    bestMatch: {
+      generator: string;
+      seed: number;
+      similarity: number;
+    };
+    matchingSequences: {
+      original: number[];
+      matches: boolean[];
+    };
+  };
+}
+
 // Combined analysis data type
 interface AnalysisData {
   markovChain?: MarkovChainAnalysis;
@@ -132,6 +157,7 @@ interface AnalysisData {
   arima?: ARIMAAnalysis;
   lstm?: LSTMAnalysis;
   hmm?: HMMAnalysis;
+  rng?: RNGAnalysis;
 }
 
 interface SequenceResponse {
@@ -264,6 +290,22 @@ interface BackendAnalysis {
       confidence: number;
       stateSequence?: number[];
     };
+    rng: {
+      prediction?: number;
+      confidence: number;
+      debug?: {
+        hasPotentialRNG: boolean;
+        bestMatch: {
+          generator: string;
+          seed: number;
+          similarity: number;
+        };
+        matchingSequences: {
+          original: number[];
+          matches: boolean[];
+        };
+      };
+    };
   };
 }
 
@@ -315,9 +357,29 @@ const transformMatrix = (matrixRecord: { [key: string]: { [key: string]: number 
 
 // Transform functions
 function transformPrediction(data: any): BaseAnalysis {
+  // Extract prediction from either debug.final.prediction, prediction, or predictedNext
+  let predictedNext = undefined;
+  if (data.debug?.final?.prediction !== undefined) {
+    predictedNext = parseInt(data.debug.final.prediction);
+  } else if (data.prediction !== undefined) {
+    predictedNext = data.prediction;
+  } else if (data.predictedNext !== undefined) {
+    predictedNext = data.predictedNext;
+  }
+
+  // Extract confidence from either debug.final.confidence, probability, or confidence
+  let confidence = 0;
+  if (data.debug?.final?.confidence !== undefined) {
+    confidence = data.debug.final.confidence;
+  } else if (data.probability !== undefined) {
+    confidence = data.probability;
+  } else if (data.confidence !== undefined) {
+    confidence = data.confidence;
+  }
+
   return {
-    predictedNext: data.prediction !== undefined ? data.prediction : data.predictedNext,
-    confidence: data.confidence || 0,
+    predictedNext,
+    confidence,
     error: data.error
   };
 }
@@ -361,19 +423,159 @@ function transformAnalysisData(backendData: any): AnalysisData {
     hmm: backendData.analyses.hmm ? {
       ...transformPrediction(backendData.analyses.hmm),
       stateSequence: backendData.analyses.hmm.stateSequence
+    } : undefined,
+    
+    rng: backendData.analyses.rng ? {
+      ...transformPrediction(backendData.analyses.rng),
+      debug: backendData.analyses.rng.debug
     } : undefined
   };
 }
+
+interface ModelSpecificDisplay {
+  [key: string]: React.FC<{data: any}>;
+}
+
+const LSTMDisplay: React.FC<{data: any}> = ({data}) => {
+  if (!data?.debug?.networkState) return null;
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="subtitle2">Network State</Typography>
+      {data.isTraining && (
+        <Box sx={{ mt: 1, mb: 2 }}>
+          <Typography variant="caption" color="info.main" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CircularProgress size={16} />
+            Model is Training
+          </Typography>
+          <Typography variant="caption" color="text.secondary" display="block">
+            Predictions may be less accurate during this time.
+          </Typography>
+        </Box>
+      )}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Typography variant="caption">
+          Training Loss: {data.debug.networkState.loss?.toFixed(4) || 'N/A'}
+        </Typography>
+        <Typography variant="caption">
+          Epochs: {data.debug.networkState.epochs || 0}
+        </Typography>
+        <Typography variant="caption">
+          Sequence Length: {data.debug.networkState.sequenceLength || 'N/A'}
+        </Typography>
+        {data.debug.networkState.probabilities && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="subtitle2">Prediction Probabilities</Typography>
+            {data.debug.networkState.probabilities.map((prob: number, idx: number) => (
+              <Box key={idx} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="caption">{symbolMap[idx]}</Typography>
+                <Typography variant="caption">{(prob * 100).toFixed(1)}%</Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
+      </Box>
+    </Box>
+  );
+};
+
+const MonteCarloDisplay: React.FC<{data: any}> = ({data}) => {
+  if (!data?.debug?.probabilities) return null;
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="subtitle2">Symbol Probabilities</Typography>
+      {Object.entries(data.debug.probabilities).map(([symbol, prob]) => (
+        <Box key={symbol} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Typography variant="caption">{symbolMap[parseInt(symbol)]}</Typography>
+          <Typography variant="caption">{(prob as number * 100).toFixed(1)}%</Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
+const HMMDisplay: React.FC<{data: any}> = ({data}) => {
+  if (!data?.debug?.states) return null;
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="subtitle2">Hidden State Analysis</Typography>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Typography variant="caption">
+          Active States: {data.debug.states.active || 0}
+        </Typography>
+        <Typography variant="caption">
+          State Stability: {(data.debug.states.stability * 100).toFixed(1)}%
+        </Typography>
+      </Box>
+    </Box>
+  );
+};
+
+const RNGDisplay: React.FC<{data: any}> = ({data}) => {
+  if (!data?.debug?.rng) return null;
+  const rngData = data.debug.rng;
+
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="subtitle2">RNG Analysis</Typography>
+      {rngData.hasPotentialRNG ? (
+        <>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" color="success.main">
+              Potential RNG pattern detected!
+            </Typography>
+            <Typography variant="body2">
+              Best Match: {rngData.bestMatch.generator} (Seed: {rngData.bestMatch.seed})
+            </Typography>
+            <Typography variant="caption">
+              Similarity: {(rngData.bestMatch.similarity * 100).toFixed(1)}%
+            </Typography>
+          </Box>
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2">Pattern Visualization</Typography>
+            <Box sx={{ 
+              display: 'flex', 
+              flexWrap: 'wrap', 
+              gap: 0.5, 
+              mt: 1,
+              maxHeight: '100px',
+              overflowY: 'auto'
+            }}>
+              {rngData.matchingSequences.matches.map((matches: boolean, idx: number) => (
+                <Chip
+                  key={idx}
+                  label={symbolMap[rngData.matchingSequences.original[idx]]}
+                  size="small"
+                  color={matches ? "success" : "error"}
+                  sx={{ minWidth: '40px' }}
+                />
+              ))}
+            </Box>
+          </Box>
+        </>
+      ) : (
+        <Typography variant="caption" color="text.secondary">
+          No RNG patterns detected
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
+const modelSpecificDisplays: ModelSpecificDisplay = {
+  'lstm': LSTMDisplay,
+  'monte carlo': MonteCarloDisplay,
+  'hmm': HMMDisplay,
+  'rng': RNGDisplay
+};
+
+const symbolMap = ['♠', '♥', '♦', '♣'];
 
 const GameAnalysisPage: React.FC = () => {
   const [sequence, setSequence] = useState<SequenceItem[]>([]);
   const [analysisData, setAnalysisData] = useState<AnalysisData>({});
   const [modelStates, setModelStates] = useState<Record<string, ModelState>>({});
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<ErrorState | null>(null);
-
-  // Frontend symbol mapping (0=Spades, 1=Hearts, 2=Diamonds, 3=Clubs)
-  const symbols = ['♠', '♥', '♦', '♣'];
+  const [error, setError] = useState<{type: 'error' | 'warning', message: string} | null>(null);
 
   useEffect(() => {
     loadData();
@@ -385,7 +587,8 @@ const GameAnalysisPage: React.FC = () => {
       monteCarlo: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
       arima: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
       lstm: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
-      hmm: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true }
+      hmm: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      rng: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true }
     });
   }, []);
 
@@ -518,8 +721,11 @@ const GameAnalysisPage: React.FC = () => {
       monteCarlo: 'Monte Carlo',
       arima: 'ARIMA',
       lstm: 'LSTM',
-      hmm: 'HMM'
+      hmm: 'HMM',
+      rng: 'RNG'
     }[type] || type;
+
+    const ModelDisplay = modelSpecificDisplays[type.toLowerCase()];
 
     return (
       <Card sx={{ mb: 2, p: 2 }}>
@@ -543,7 +749,7 @@ const GameAnalysisPage: React.FC = () => {
           </Typography>
           <Typography variant="h4" component="div" sx={{ fontFamily: 'monospace' }}>
             {data.predictedNext !== undefined && data.predictedNext !== null
-              ? symbols[data.predictedNext]
+              ? symbolMap[data.predictedNext]
               : 'N/A'}
           </Typography>
         </Box>
@@ -580,7 +786,7 @@ const GameAnalysisPage: React.FC = () => {
               {Object.entries(data.debug.prediction.probabilities as Record<string, number>).map(([symbol, prob]) => (
                 <Chip
                   key={symbol}
-                  label={`${symbol}: ${(prob * 100).toFixed(1)}%`}
+                  label={`${symbolMap[parseInt(symbol)]}: ${(prob * 100).toFixed(1)}%`}
                   size="small"
                   sx={{
                     bgcolor: 'background.default',
@@ -592,96 +798,280 @@ const GameAnalysisPage: React.FC = () => {
           </Box>
         )}
 
-        {/* Monte Carlo Debug Info */}
+        {/* Monte Carlo Detailed Analysis */}
         {type === 'monteCarlo' && data.debug && (
           <Box sx={{ mt: 2 }}>
-            {/* Transition Matrix */}
+            {/* Transition Matrix Section */}
             {data.debug.transition_matrix && (
               <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2">Transition Matrix</Typography>
-                <Box sx={{ 
-                  p: 1, 
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem',
-                  maxHeight: '100px',
-                  overflow: 'auto'
-                }}>
-                  {Object.entries(data.debug.transition_matrix.normalized).map(([from, to]) => (
-                    <div key={from}>
-                      {symbols[parseInt(from)]} → {
-                        Object.entries(to as Record<string, number>)
-                          .map(([sym, prob]) => `${symbols[parseInt(sym)]}: ${(prob * 100).toFixed(1)}%`)
-                          .join(' | ')
-                      }
-                    </div>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Transition Matrix Analysis</Typography>
+                <Grid container spacing={2}>
+                  {Object.entries(data.debug.transition_matrix.normalized as Record<string, Record<string, number>>).map(([from, transitions]) => (
+                    <Grid item xs={12} sm={6} md={4} key={from}>
+                      <Paper sx={{ p: 1, bgcolor: 'background.paper' }}>
+                        <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
+                          From {symbolMap[parseInt(from)]}:
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                          {Object.entries(transitions as Record<string, number>).map(([to, prob]) => (
+                            <Chip
+                              key={to}
+                              label={`${symbolMap[parseInt(to)]}: ${(prob * 100).toFixed(1)}%`}
+                              size="small"
+                              sx={{
+                                bgcolor: prob > 0.5 ? 'success.main' : prob > 0.25 ? 'warning.main' : 'error.main',
+                                color: 'white',
+                                fontSize: '0.7rem'
+                              }}
+                            />
+                          ))}
+                        </Box>
+                      </Paper>
+                    </Grid>
                   ))}
-                </Box>
+                </Grid>
               </Box>
             )}
 
-            {/* Patterns */}
-            {data.debug.patterns?.significant.length > 0 && (
+            {/* Pattern Analysis Section */}
+            {data.debug.patterns?.significant && (
               <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2">Significant Patterns</Typography>
-                <Box sx={{ 
-                  p: 1, 
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem',
-                  maxHeight: '100px',
-                  overflow: 'auto'
-                }}>
-                  {data.debug.patterns.significant.slice(0, 3).map((pattern: any, i: number) => (
-                    <div key={i}>
-                      {pattern.pattern}: {pattern.count}x ({(pattern.frequency * 100).toFixed(1)}%)
-                    </div>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Significant Patterns</Typography>
+                <Grid container spacing={1}>
+                  {data.debug.patterns.significant.map((pattern: { pattern: string; frequency: number }, idx: number) => (
+                    <Grid item xs={12} sm={6} md={4} key={idx}>
+                      <Paper sx={{ p: 1, bgcolor: 'background.paper' }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                            {pattern.pattern.split('').map(p => symbolMap[parseInt(p)]).join(' → ')}
+                          </Typography>
+                          <Chip
+                            label={`${(pattern.frequency * 100).toFixed(1)}%`}
+                            size="small"
+                            color={pattern.frequency > 0.3 ? 'success' : 'warning'}
+                          />
+                        </Box>
+                      </Paper>
+                    </Grid>
                   ))}
-                </Box>
-              </Box>
-            )}
-
-            {/* Simulation Examples */}
-            {data.debug.simulations && (
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2">
-                  Simulations ({data.debug.simulations.valid}/{data.debug.simulations.total} valid)
-                </Typography>
-                <Box sx={{ 
-                  p: 1, 
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem',
-                  maxHeight: '100px',
-                  overflow: 'auto'
-                }}>
-                  {data.debug.simulations.examples.slice(0, 3).map((sim: any, i: number) => (
-                    <div key={i}>
-                      #{sim.simulation}: {sim.sequence.join(' → ')}
-                    </div>
-                  ))}
-                </Box>
+                </Grid>
               </Box>
             )}
 
             {/* Prediction Components */}
-            {data.debug.prediction && (
-              <Box sx={{ mb: 1 }}>
-                <Typography variant="subtitle2">Confidence Components</Typography>
-                <Box sx={{ 
-                  p: 1, 
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem'
-                }}>
-                  <div>Probability: {(data.debug.prediction.components.probability * 100).toFixed(1)}%</div>
-                  <div>Entropy: {(data.debug.prediction.components.entropy * 100).toFixed(1)}%</div>
-                  <div>Pattern: {(data.debug.prediction.components.pattern * 100).toFixed(1)}%</div>
+            {data.debug.prediction?.final && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Prediction Analysis</Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <Paper sx={{ p: 2, bgcolor: 'background.paper' }}>
+                      <Typography variant="body2" sx={{ mb: 1 }}>Confidence Components</Typography>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {Object.entries(data.debug.prediction.final.components as Record<string, number>).map(([component, value]) => (
+                          <Box key={component}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ textTransform: 'capitalize' }}>
+                                {component}
+                              </Typography>
+                              <Typography variant="caption">
+                                {(value * 100).toFixed(1)}%
+                              </Typography>
+                            </Box>
+                            <LinearProgress
+                              variant="determinate"
+                              value={value * 100}
+                              sx={{
+                                bgcolor: 'background.default',
+                                '& .MuiLinearProgress-bar': {
+                                  bgcolor: value > 0.7 ? 'success.main' : value > 0.4 ? 'warning.main' : 'error.main',
+                                },
+                              }}
+                            />
+                          </Box>
+                        ))}
+                      </Box>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Paper sx={{ p: 2, bgcolor: 'background.paper' }}>
+                      <Typography variant="body2" sx={{ mb: 1 }}>Symbol Probabilities</Typography>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {Object.entries(data.debug.prediction.probabilities as Record<string, number>)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([symbol, prob]) => (
+                            <Box key={symbol}>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                                  {symbolMap[parseInt(symbol)]}
+                                </Typography>
+                                <Typography variant="caption">
+                                  {(prob * 100).toFixed(1)}%
+                                </Typography>
+                              </Box>
+                              <LinearProgress
+                                variant="determinate"
+                                value={prob * 100}
+                                sx={{
+                                  bgcolor: 'background.default',
+                                  '& .MuiLinearProgress-bar': {
+                                    bgcolor: prob > 0.4 ? 'success.main' : prob > 0.2 ? 'warning.main' : 'error.main',
+                                  },
+                                }}
+                              />
+                            </Box>
+                        ))}
+                      </Box>
+                    </Paper>
+                  </Grid>
+                </Grid>
+              </Box>
+            )}
+
+            {/* Simulation Examples */}
+            {data.debug.simulations?.examples && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Simulation Examples ({data.debug.simulations.valid} valid out of {data.debug.simulations.total})
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {data.debug.simulations.examples.map((example: { simulation: number; sequence: string[] }, idx: number) => (
+                    <Paper key={idx} sx={{ p: 1, bgcolor: 'background.paper' }}>
+                      <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                        Simulation {example.simulation}
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                        {example.sequence.map((sym: string, symIdx: number) => (
+                          <Chip
+                            key={symIdx}
+                            label={symbolMap[parseInt(sym)]}
+                            size="small"
+                            sx={{
+                              bgcolor: symIdx === example.sequence.length - 1 ? 'primary.main' : 'background.default',
+                              color: symIdx === example.sequence.length - 1 ? 'white' : 'text.primary',
+                              fontFamily: 'monospace'
+                            }}
+                          />
+                        ))}
+                      </Box>
+                    </Paper>
+                  ))}
                 </Box>
+              </Box>
+            )}
+          </Box>
+        )}
+
+        {/* LSTM Detailed Analysis */}
+        {type === 'lstm' && data && (
+          <Box sx={{ mt: 2 }}>
+            {/* Training Status */}
+            {data.isTraining && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <AlertTitle>Model is Training</AlertTitle>
+                The LSTM model is currently being trained. Predictions may be less accurate during this time.
+              </Alert>
+            )}
+
+            {/* Probability Distribution */}
+            {data.probabilities && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Probability Distribution</Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12}>
+                    <Paper sx={{ p: 2, bgcolor: 'background.paper' }}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        {data.probabilities.map((prob: number, idx: number) => (
+                          <Box key={idx}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                                {symbolMap[idx]}
+                              </Typography>
+                              <Typography variant="caption">
+                                {(prob * 100).toFixed(1)}%
+                              </Typography>
+                            </Box>
+                            <LinearProgress
+                              variant="determinate"
+                              value={prob * 100}
+                              sx={{
+                                bgcolor: 'background.default',
+                                '& .MuiLinearProgress-bar': {
+                                  bgcolor: prob > 0.4 ? 'success.main' : prob > 0.2 ? 'warning.main' : 'error.main',
+                                },
+                              }}
+                            />
+                          </Box>
+                        ))}
+                      </Box>
+                    </Paper>
+                  </Grid>
+                </Grid>
+              </Box>
+            )}
+
+            {/* Model Performance */}
+            {modelStates.lstm?.performance && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Model Performance</Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <Paper sx={{ p: 2, bgcolor: 'background.paper' }}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Box>
+                          <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
+                            Accuracy
+                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <CircularProgress
+                              variant="determinate"
+                              value={modelStates.lstm.performance.accuracy * 100}
+                              size={40}
+                              sx={{
+                                color: modelStates.lstm.performance.accuracy > 0.7 ? 'success.main' : 
+                                       modelStates.lstm.performance.accuracy > 0.4 ? 'warning.main' : 'error.main'
+                              }}
+                            />
+                            <Typography variant="body2">
+                              {(modelStates.lstm.performance.accuracy * 100).toFixed(1)}%
+                            </Typography>
+                          </Box>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
+                            Predictions
+                          </Typography>
+                          <Typography variant="body2">
+                            {modelStates.lstm.performance.correctPredictions} correct out of {modelStates.lstm.performance.totalPredictions} total
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Paper sx={{ p: 2, bgcolor: 'background.paper' }}>
+                      <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
+                        Last Prediction
+                      </Typography>
+                      {modelStates.lstm.performance.lastPrediction !== undefined && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Chip
+                            label={symbolMap[modelStates.lstm.performance.lastPrediction]}
+                            color={modelStates.lstm.performance.wasCorrect ? "success" : "error"}
+                            size="small"
+                          />
+                          <Typography variant="caption">
+                            {modelStates.lstm.performance.wasCorrect ? "Correct" : "Incorrect"}
+                          </Typography>
+                        </Box>
+                      )}
+                      {modelStates.lstm.lastTrainingTime && (
+                        <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'text.secondary' }}>
+                          Last trained: {new Date(modelStates.lstm.lastTrainingTime).toLocaleString()}
+                        </Typography>
+                      )}
+                    </Paper>
+                  </Grid>
+                </Grid>
               </Box>
             )}
           </Box>
@@ -709,6 +1099,8 @@ const GameAnalysisPage: React.FC = () => {
             Error: {data.error}
           </Typography>
         )}
+        
+        {ModelDisplay && <ModelDisplay data={data} />}
       </Card>
     );
   };
@@ -726,127 +1118,158 @@ const GameAnalysisPage: React.FC = () => {
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {error && (
-        <Alert 
-          severity={error.type === 'error' ? 'error' : 'warning'}
-          onClose={() => setError(null)}
-          sx={{ mb: 2 }}
-        >
-          {error.message}
-        </Alert>
+        <Box sx={{ mb: 2 }}>
+          <Paper 
+            elevation={0} 
+            sx={{ 
+              p: 2, 
+              bgcolor: error.type === 'error' ? 'error.main' : 'warning.main',
+              color: 'white'
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography>{error.message}</Typography>
+              <IconButton size="small" onClick={() => setError(null)} sx={{ color: 'white' }}>
+                <CloseIcon />
+              </IconButton>
+            </Box>
+          </Paper>
+        </Box>
       )}
 
       <Grid container spacing={3}>
-        {/* Game Controls */}
-        <Grid item xs={12} md={4}>
-          <Paper elevation={3} sx={{ p: 3 }}>
-            <Typography variant="h5" gutterBottom>
-              Game Controls
+        <Grid item xs={12}>
+          <Paper sx={{ p: 3 }}>
+            <Typography variant="h5" component="h2" gutterBottom>
+              Symbol Input
             </Typography>
             <Box sx={{ mb: 3 }}>
-              <ButtonGroup 
-                variant="contained" 
-                size="large"
-                sx={{ 
-                  mb: 2,
-                  '& .MuiButton-root': {
-                    fontSize: '1.5rem',
-                    padding: '12px 24px',
-                  }
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 1,
+                  mb: 2
                 }}
               >
-                {symbols.map((symbol, index) => (
+                {symbolMap.map((symbol, index) => (
                   <Button
                     key={symbol}
+                    variant="contained"
+                    size="large"
                     onClick={() => addSymbol(index)}
                     disabled={loading}
+                    sx={{
+                      minWidth: '80px',
+                      fontSize: '1.5rem',
+                      fontFamily: 'monospace'
+                    }}
                   >
                     {symbol}
                   </Button>
                 ))}
-              </ButtonGroup>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Button
+                  variant="outlined"
+                  onClick={generateTestData}
+                  disabled={loading}
+                  startIcon={loading ? <CircularProgress size={20} /> : null}
+                >
+                  Generate Test Data
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={undoLastSymbol}
+                  disabled={loading || sequence.length === 0}
+                  startIcon={<UndoIcon />}
+                >
+                  Undo
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={resetDatabase}
+                  disabled={loading}
+                >
+                  Reset DB
+                </Button>
+              </Box>
             </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-              <Button
-                variant="contained"
-                onClick={generateTestData}
-                disabled={loading}
-                sx={{ mr: 2 }}
-              >
-                Generate Test Data
-              </Button>
-              <IconButton 
-                onClick={undoLastSymbol}
-                disabled={loading || sequence.length === 0}
-                color="primary"
-                size="large"
-              >
-                <UndoIcon fontSize="large" />
-              </IconButton>
-              <Button
-                variant="outlined"
-                color="error"
-                onClick={resetDatabase}
-                disabled={loading}
-                sx={{ ml: 2 }}
-              >
-                Reset DB
-              </Button>
+            
+            {/* Sequence Display */}
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="subtitle1" gutterBottom>
+                Current Sequence ({sequence.length} symbols)
+              </Typography>
+              <Box sx={{ 
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 0.5,
+                maxHeight: '150px',
+                overflowY: 'auto',
+                p: 1,
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1
+              }}>
+                {sequence.map((item, index) => (
+                  <Chip
+                    key={index}
+                    label={symbolMap[item.symbol]}
+                    size="small"
+                    sx={{ 
+                      fontFamily: 'monospace',
+                      fontSize: '1rem'
+                    }}
+                  />
+                ))}
+              </Box>
             </Box>
-            <Typography variant="h6">
-              Total Symbols: {sequence.length}
-            </Typography>
           </Paper>
         </Grid>
 
-        {/* Analysis Results */}
-        <Grid item xs={12} md={8}>
+        {/* Analysis Cards */}
+        <Grid item xs={12}>
           <Grid container spacing={2}>
-            {/* Basic Models (Always Show) */}
             <Grid item xs={12}>
-              <Typography variant="h6" gutterBottom>
-                Basic Analysis Models
-              </Typography>
-              <Grid container spacing={2}>
-                {Object.entries({
-                  'Markov Chain': { type: 'markov', ...analysisData.markovChain },
-                  'Entropy': { type: 'entropy', ...analysisData.entropy },
-                  'Chi-Square': { type: 'chiSquare', ...analysisData.chiSquare }
-                } as Record<string, any>).map(([name, data]) => (
-                  <Grid item xs={12} sm={6} md={4} key={name}>
-                    {renderAnalysisCard(name, data)}
-                  </Grid>
-                ))}
-              </Grid>
+              <Typography variant="h5" gutterBottom>Basic Analysis Models</Typography>
             </Grid>
-
-            {/* Advanced Models (Show based on sequence length) */}
-            {sequence.length >= 100 && (
-              <Grid item xs={12}>
-                <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>
-                  Advanced Analysis Models
-                </Typography>
-                <Grid container spacing={2}>
-                  {Object.entries({
-                    ...(sequence.length >= 100 ? {
-                      'Monte Carlo': { type: 'monteCarlo', ...analysisData.monteCarlo }
-                    } : {}),
-                    ...(sequence.length >= 150 ? {
-                      'ARIMA': { type: 'arima', ...analysisData.arima }
-                    } : {}),
-                    ...(sequence.length >= 200 ? {
-                      'LSTM': { type: 'lstm', ...analysisData.lstm }
-                    } : {}),
-                    ...(sequence.length >= 300 ? {
-                      'HMM': { type: 'hmm', ...analysisData.hmm }
-                    } : {})
-                  } as Record<string, any>).map(([name, data]) => (
-                    <Grid item xs={12} sm={6} md={4} key={name}>
-                      {renderAnalysisCard(name, data)}
-                    </Grid>
-                  ))}
-                </Grid>
+            {Object.entries({
+              'Markov Chain': { type: 'basic', ...analysisData.markovChain },
+              'Entropy': { type: 'basic', ...analysisData.entropy },
+              'Chi-Square': { type: 'basic', ...analysisData.chiSquare }
+            }).map(([name, data]) => (
+              <Grid item xs={12} sm={6} md={4} key={name}>
+                {renderAnalysisCard(name, data)}
               </Grid>
-            )}
+            ))}
+          </Grid>
+        </Grid>
+
+        <Grid item xs={12}>
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <Typography variant="h5" gutterBottom>Advanced Analysis Models</Typography>
+            </Grid>
+            {Object.entries({
+              'Monte Carlo': { type: 'advanced', ...analysisData.monteCarlo },
+              'ARIMA': { type: 'advanced', ...analysisData.arima },
+              ...(sequence.length >= 200 ? {
+                'LSTM': { type: 'advanced', ...analysisData.lstm }
+              } : {}),
+              ...(sequence.length >= 300 ? {
+                'HMM': { type: 'advanced', ...analysisData.hmm }
+              } : {}),
+              ...(sequence.length >= 50 ? {
+                'RNG': { type: 'advanced', ...analysisData.rng }
+              } : {})
+            }).map(([name, data]) => (
+              <Grid item xs={12} sm={6} md={4} key={name}>
+                {renderAnalysisCard(name, data)}
+              </Grid>
+            ))}
           </Grid>
         </Grid>
       </Grid>

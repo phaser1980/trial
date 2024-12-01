@@ -23,7 +23,8 @@ class ModelManager {
       'monte carlo simulation': 'monteCarlo',
       'arima analysis': 'arima',
       'lstm analysis': 'lstm',
-      'hmm analysis': 'hmm'
+      'hmm analysis': 'hmm',
+      'rng analysis': 'rng'
     };
 
     // Reverse mapping for tool names to display names
@@ -34,7 +35,8 @@ class ModelManager {
       monteCarlo: 'Monte Carlo Simulation',
       arima: 'ARIMA Analysis',
       lstm: 'LSTM Analysis',
-      hmm: 'HMM Analysis'
+      hmm: 'HMM Analysis',
+      rng: 'RNG Analysis'
     };
 
     this.modelWeights = {
@@ -44,16 +46,19 @@ class ModelManager {
       monteCarlo: 1.0,
       arima: 1.0,
       lstm: 1.0,
-      hmm: 1.0
+      hmm: 1.0,
+      rng: 1.0
     };
     this.recentAccuracy = {
       markovChain: [],
       entropy: [],
       chiSquare: [],
       monteCarlo: [],
+      monteCarlo: [],
       arima: [],
       lstm: [],
-      hmm: []
+      hmm: [],
+      rng: []
     };
     this.confidenceScores = {
       markovChain: [],
@@ -63,7 +68,8 @@ class ModelManager {
       monteCarlo: [],
       arima: [],
       lstm: [],
-      hmm: []
+      hmm: [],
+      rng: []
     };
     this.windowSize = 20;      // Number of recent predictions to consider
     this.learningRate = 0.1;   // Rate at which weights are adjusted
@@ -731,8 +737,10 @@ class EntropyAnalysis extends AnalysisTool {
       return {
         prediction: null,
         confidence: 0,
-        entropy: 0,
-        debug: this.debugLog
+        debug: {
+          log: this.debugLog,
+          final: { prediction: null, confidence: 0 }
+        }
       };
     }
 
@@ -792,8 +800,17 @@ class EntropyAnalysis extends AnalysisTool {
     return {
       prediction,
       confidence,
-      entropy: normalizedPatternEntropy,
-      debug: this.debugLog
+      debug: {
+        log: this.debugLog,
+        final: {
+          prediction: prediction,
+          confidence: confidence
+        },
+        entropy: {
+          pattern: normalizedPatternEntropy,
+          symbol: normalizedSymbolEntropy
+        }
+      }
     };
   }
 }
@@ -830,13 +847,10 @@ class MonteCarloAnalysis extends AnalysisTool {
   getMostLikelyOutcome(predictions) {
     const counts = {};
     predictions.forEach(p => counts[p] = (counts[p] || 0) + 1);
-    return Object.entries(counts)
-      .reduce((a, b) => counts[a] > counts[b] ? a : b)[0];
-  }
-
-  calculateConfidence(predictions, prediction) {
-    const count = predictions.filter(p => p === prediction).length;
-    return Math.max(0.25, count / predictions.length);
+    const [prediction, count] = Object.entries(counts)
+      .reduce(([ak, av], [bk, bv]) => av > bv ? [ak, av] : [bk, bv], ['0', 0]);
+    const probability = count / predictions.length;
+    return { prediction: parseInt(prediction), probability };
   }
 
   analyze(symbols) {
@@ -845,7 +859,14 @@ class MonteCarloAnalysis extends AnalysisTool {
 
     if (symbols.length < this.minSamples) {
       this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
-      return { prediction: null, confidence: 0, message: 'Insufficient data', debug: this.debugLog };
+      return { 
+        prediction: null, 
+        confidence: 0, 
+        debug: {
+          log: this.debugLog,
+          final: { prediction: null, confidence: 0 }
+        }
+      };
     }
 
     try {
@@ -856,7 +877,7 @@ class MonteCarloAnalysis extends AnalysisTool {
       // Run simulations
       const predictions = [];
       for (let i = 0; i < this.iterations; i++) {
-        predictions.push(this.simulateNext(frequencies));
+        predictions.push(parseInt(this.simulateNext(frequencies)));
       }
       this.debugLog.push(`Completed ${this.iterations} simulations`);
 
@@ -865,24 +886,37 @@ class MonteCarloAnalysis extends AnalysisTool {
       this.debugLog.push(`Most likely outcome: ${prediction} with probability ${probability}`);
       
       // Calculate confidence
-      const confidence = this.calculateConfidence(predictions, prediction);
+      const confidence = Math.min(0.95, Math.max(0.25, probability));
       this.debugLog.push(`Calculated confidence: ${confidence}`);
       
       return {
         prediction,
-        confidence: Math.min(0.95, confidence),
-        probability,
-        debug: this.debugLog,
-        message: `Monte Carlo prediction based on ${this.iterations} simulations`
+        confidence,
+        debug: {
+          log: this.debugLog,
+          final: {
+            prediction: prediction,
+            confidence: confidence
+          },
+          probabilities: Object.fromEntries(
+            [0,1,2,3].map(symbol => [
+              symbol,
+              predictions.filter(p => p === symbol).length / predictions.length
+            ])
+          )
+        }
       };
     } catch (error) {
       this.debugLog.push(`Error in analysis: ${error.message}`);
       console.error('[Monte Carlo] Analysis error:', error, this.debugLog);
       return { 
         prediction: null, 
-        confidence: 0.25, 
-        error: error.message,
-        debug: this.debugLog 
+        confidence: 0, 
+        debug: {
+          log: this.debugLog,
+          final: { prediction: null, confidence: 0 },
+          error: error.message
+        }
       };
     }
   }
@@ -892,167 +926,211 @@ class MonteCarloAnalysis extends AnalysisTool {
 class LSTMAnalysis extends AnalysisTool {
   constructor() {
     super('LSTM Analysis');
-    this.sequenceLength = 10; 
+    this.sequenceLength = 10;
     this.model = null;
     this.isTraining = false;
-    this.minTrainingSize = 100; 
+    this.minTrainingSize = 100;
     this.outputSize = 4;
     this.initialized = false;
     this.tf = require('@tensorflow/tfjs');
     this.debugLog = [];
     this.tensors = new Set();
     this.lastTrainingLength = null;
+    this.epochs = 0;
+    this.currentLoss = null;
   }
 
-  preprocessInput(sequence) {
-    const numericalData = sequence.map(symbol => symbol);
-    const normalizedData = numericalData.map(val => val / (this.outputSize - 1));
-    return this.tf.tensor3d([normalizedData.map(val => [val])]);
+  createSequences(symbols) {
+    if (symbols.length < this.sequenceLength + 1) {
+      return null;
+    }
+
+    const xs = [];
+    const ys = [];
+
+    for (let i = 0; i <= symbols.length - this.sequenceLength - 1; i++) {
+      const sequence = symbols.slice(i, i + this.sequenceLength);
+      const nextSymbol = symbols[i + this.sequenceLength];
+      
+      xs.push(sequence.map(s => [s]));
+      
+      // One-hot encode the target
+      const target = new Array(this.outputSize).fill(0);
+      target[nextSymbol] = 1;
+      ys.push(target);
+    }
+
+    return { xs, ys };
   }
 
   async initializeModel() {
-    if (this.model) return;
+    if (this.model) {
+      this.model.dispose();
+    }
 
-    const model = this.tf.sequential();
+    this.model = this.tf.sequential();
     
-    model.add(this.tf.layers.lstm({
+    this.model.add(this.tf.layers.lstm({
       units: 32,
       inputShape: [this.sequenceLength, 1],
       returnSequences: false
     }));
-
-    model.add(this.tf.layers.dense({
-      units: 16,
-      activation: 'relu'
-    }));
-
-    model.add(this.tf.layers.dropout({ rate: 0.2 }));
-
-    model.add(this.tf.layers.dense({
+    
+    this.model.add(this.tf.layers.dense({
       units: this.outputSize,
       activation: 'softmax'
     }));
 
-    model.compile({
+    this.model.compile({
       optimizer: this.tf.train.adam(0.001),
       loss: 'categoricalCrossentropy',
       metrics: ['accuracy']
     });
 
-    this.model = model;
     this.initialized = true;
   }
 
-  async predict(symbols) {
+  async train(symbols) {
+    if (symbols.length < this.minTrainingSize) {
+      return false;
+    }
+
+    const sequences = this.createSequences(symbols);
+    if (!sequences || sequences.xs.length === 0) {
+      return false;
+    }
+
+    const xs = this.tf.tensor3d(sequences.xs, [sequences.xs.length, this.sequenceLength, 1]);
+    const ys = this.tf.tensor2d(sequences.ys, [sequences.ys.length, this.outputSize]);
+
     try {
-      if (!this.model || !symbols || symbols.length < this.sequenceLength) {
-        return null;
-      }
+      const result = await this.model.fit(xs, ys, {
+        epochs: 10,
+        batchSize: 32,
+        shuffle: true,
+        verbose: 0
+      });
 
-      const sequence = symbols.slice(-this.sequenceLength);
-      const input = this.preprocessInput(sequence);
+      this.epochs += 10;
+      this.currentLoss = result.history.loss[result.history.loss.length - 1];
+
+      xs.dispose();
+      ys.dispose();
+      return true;
+    } catch (error) {
+      console.error('LSTM training error:', error);
+      return false;
+    }
+  }
+
+  async predict(sequence) {
+    if (!this.model || sequence.length < this.sequenceLength) {
+      return null;
+    }
+
+    const input = sequence.slice(-this.sequenceLength).map(x => [x]);
+    const xs = this.tf.tensor3d([input], [1, this.sequenceLength, 1]);
+    
+    try {
+      const prediction = await this.model.predict(xs);
+      const probabilities = await prediction.data();
+      xs.dispose();
+      prediction.dispose();
+
+      const maxProb = Math.max(...probabilities);
+      const predictedClass = probabilities.indexOf(maxProb);
       
-      const prediction = await this.model.predict(input);
-      const predIndex = tf.argMax(prediction, 1).dataSync()[0];
-      const confidence = prediction.dataSync()[predIndex];
-
       return {
-        prediction: predIndex,
-        confidence: confidence
+        prediction: predictedClass,
+        confidence: maxProb,
+        probabilities: Array.from(probabilities)
       };
     } catch (error) {
-      console.error('[LSTM] Prediction error:', error);
+      console.error('LSTM prediction error:', error);
       return null;
     }
   }
 
-  async train(symbols) {
-    if (this.isTraining || !symbols || symbols.length < this.sequenceLength + 1) {
-      return;
-    }
-
-    try {
-      this.isTraining = true;
-      await this.initializeModel();
-
-      const numericalData = symbols.map(symbol => symbol);
-      const normalizedData = numericalData.map(val => val / (this.outputSize - 1));
-      const { sequences, targets } = this.createSequences(normalizedData);
-
-      await this.model.fit(sequences, targets, {
-        epochs: 100,
-        batchSize: 64,
-        shuffle: true,
-        verbose: 0,
-        validationSplit: 0.2
-      });
-
-      sequences.dispose();
-      targets.dispose();
-
-    } catch (error) {
-      console.error('[LSTM] Training error:', error);
-    } finally {
-      this.isTraining = false;
-    }
-  }
-
-  createSequences(data) {
-    const sequences = [];
-    const targets = [];
-
-    for (let i = 0; i <= data.length - this.sequenceLength - 1; i++) {
-      const sequence = data.slice(i, i + this.sequenceLength).map(val => [val]);
-      sequences.push(sequence);
-      
-      const oneHot = Array(this.outputSize).fill(0);
-      oneHot[Math.floor(data[i + this.sequenceLength] * (this.outputSize - 1) + 0.5)] = 1;
-      targets.push(oneHot);
-    }
-
-    return {
-      sequences: this.tf.tensor3d(sequences),
-      targets: this.tf.tensor2d(targets)
-    };
-  }
-
   async analyze(symbols) {
     this.debugLog = [];
-    this.debugLog.push(`Starting LSTM analysis with ${symbols.length} symbols`);
 
     if (symbols.length < this.minTrainingSize) {
-      this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minTrainingSize}`);
-      return { prediction: null, confidence: 0, message: 'Insufficient data', debug: this.debugLog };
+      return {
+        prediction: null,
+        confidence: 0,
+        debug: {
+          log: this.debugLog,
+          final: { prediction: null, confidence: 0 },
+          networkState: {
+            epochs: this.epochs,
+            loss: this.currentLoss,
+            sequenceLength: this.sequenceLength
+          }
+        }
+      };
     }
 
     try {
       if (!this.initialized) {
-        this.debugLog.push('Initializing LSTM model');
         await this.initializeModel();
-        this.initialized = true;
       }
 
-      // Improve confidence calculation based on sequence length
-      const baseConfidence = 0.6;
-      const sequenceWeight = Math.min(1, (symbols.length - this.minTrainingSize) / 300);
-      const adjustedConfidence = Math.min(0.95, baseConfidence * (1 + sequenceWeight));
+      // Train if we have new data
+      if (symbols.length !== this.lastTrainingLength) {
+        await this.train(symbols);
+        this.lastTrainingLength = symbols.length;
+      }
 
-      const prediction = await this.predict(symbols);
+      const result = await this.predict(symbols);
+      
+      if (!result) {
+        return {
+          prediction: null,
+          confidence: 0,
+          debug: {
+            log: this.debugLog,
+            final: { prediction: null, confidence: 0 },
+            networkState: {
+              epochs: this.epochs,
+              loss: this.currentLoss,
+              sequenceLength: this.sequenceLength
+            }
+          }
+        };
+      }
+
       return {
-        prediction: prediction.index,
-        confidence: adjustedConfidence,
-        probabilities: prediction.probabilities,
-        debug: this.debugLog,
-        isTraining: this.isTraining
+        prediction: result.prediction,
+        confidence: result.confidence,
+        debug: {
+          log: this.debugLog,
+          final: {
+            prediction: result.prediction,
+            confidence: result.confidence
+          },
+          networkState: {
+            epochs: this.epochs,
+            loss: this.currentLoss,
+            sequenceLength: this.sequenceLength,
+            probabilities: result.probabilities
+          }
+        }
       };
     } catch (error) {
-      this.debugLog.push(`Error in analysis: ${error.message}`);
-      console.error('[LSTM] Analysis error:', error, this.debugLog);
-      return { 
-        prediction: null, 
-        confidence: 0, 
-        error: error.message,
-        debug: this.debugLog 
+      console.error('LSTM analysis error:', error);
+      return {
+        prediction: null,
+        confidence: 0,
+        debug: {
+          log: [...this.debugLog, error.message],
+          final: { prediction: null, confidence: 0 },
+          networkState: {
+            epochs: this.epochs,
+            loss: this.currentLoss,
+            sequenceLength: this.sequenceLength
+          },
+          error: error.message
+        }
       };
     }
   }
@@ -1249,6 +1327,172 @@ class HMMAnalysis extends AnalysisTool {
   }
 }
 
+// RNG Analysis
+class RNGAnalysis extends AnalysisTool {
+  constructor() {
+    super('RNG Analysis');
+    this.knownGenerators = new Map([
+      ['lcg', this.linearCongruentialGenerator],
+      ['xorshift', this.xorshiftGenerator],
+      ['mersenne', this.mersenneGenerator]
+    ]);
+    this.seedCandidates = new Set();
+    this.matchThreshold = 0.85;
+    this.minSequenceLength = 50;
+  }
+
+  linearCongruentialGenerator(seed, length) {
+    const m = 2147483647;  // 2^31 - 1
+    const a = 1103515245;
+    const c = 12345;
+    const results = [];
+    let current = seed;
+
+    for (let i = 0; i < length; i++) {
+      current = (a * current + c) % m;
+      results.push(current % 4);  // Map to 0-3 range
+    }
+    return results;
+  }
+
+  xorshiftGenerator(seed, length) {
+    let state = seed;
+    const results = [];
+
+    for (let i = 0; i < length; i++) {
+      state ^= state << 13;
+      state ^= state >> 17;
+      state ^= state << 5;
+      results.push(Math.abs(state % 4));  // Map to 0-3 range
+    }
+    return results;
+  }
+
+  mersenneGenerator(seed, length) {
+    // Simplified Mersenne Twister implementation
+    const N = 624;
+    const M = 397;
+    const MATRIX_A = 0x9908b0df;
+    const UPPER_MASK = 0x80000000;
+    const LOWER_MASK = 0x7fffffff;
+
+    const mt = new Array(N);
+    let mti = N + 1;
+
+    function initGenRand(s) {
+      mt[0] = s >>> 0;
+      for (mti = 1; mti < N; mti++) {
+        mt[mti] = (1812433253 * (mt[mti-1] ^ (mt[mti-1] >>> 30)) + mti);
+        mt[mti] >>>= 0;
+      }
+    }
+
+    function genrandInt32() {
+      let y;
+      const mag01 = [0x0, MATRIX_A];
+
+      if (mti >= N) {
+        let kk;
+
+        if (mti === N+1) {
+          initGenRand(5489);
+        }
+
+        for (kk = 0; kk < N-M; kk++) {
+          y = (mt[kk] & UPPER_MASK) | (mt[kk+1] & LOWER_MASK);
+          mt[kk] = mt[kk+M] ^ (y >>> 1) ^ mag01[y & 0x1];
+        }
+        for (; kk < N-1; kk++) {
+          y = (mt[kk] & UPPER_MASK) | (mt[kk+1] & LOWER_MASK);
+          mt[kk] = mt[kk+(M-N)] ^ (y >>> 1) ^ mag01[y & 0x1];
+        }
+        y = (mt[N-1] & UPPER_MASK) | (mt[0] & LOWER_MASK);
+        mt[N-1] = mt[M-1] ^ (y >>> 1) ^ mag01[y & 0x1];
+
+        mti = 0;
+      }
+
+      y = mt[mti++];
+
+      y ^= (y >>> 11);
+      y ^= (y << 7) & 0x9d2c5680;
+      y ^= (y << 15) & 0xefc60000;
+      y ^= (y >>> 18);
+
+      return y >>> 0;
+    }
+
+    initGenRand(seed);
+    const results = [];
+    for (let i = 0; i < length; i++) {
+      results.push(genrandInt32() % 4);  // Map to 0-3 range
+    }
+    return results;
+  }
+
+  calculateSimilarity(seq1, seq2) {
+    const matches = seq1.filter((val, idx) => val === seq2[idx]).length;
+    return matches / seq1.length;
+  }
+
+  findPotentialSeeds(sequence) {
+    const results = {
+      candidates: [],
+      bestMatch: null,
+      matchingSequences: {}
+    };
+
+    if (sequence.length < this.minSequenceLength) {
+      return results;
+    }
+
+    // Test different seeds and generators
+    for (const [genName, generator] of this.knownGenerators) {
+      for (let seed = 1; seed <= 1000; seed++) {
+        const generatedSeq = generator.call(this, seed, sequence.length);
+        const similarity = this.calculateSimilarity(sequence, generatedSeq);
+
+        if (similarity > this.matchThreshold) {
+          const candidate = {
+            generator: genName,
+            seed,
+            similarity,
+            sequence: generatedSeq
+          };
+          results.candidates.push(candidate);
+
+          if (!results.bestMatch || similarity > results.bestMatch.similarity) {
+            results.bestMatch = candidate;
+          }
+        }
+      }
+    }
+
+    // Store matching sequences for visualization
+    if (results.bestMatch) {
+      results.matchingSequences = {
+        original: sequence,
+        generated: results.bestMatch.sequence,
+        matches: sequence.map((val, idx) => val === results.bestMatch.sequence[idx])
+      };
+    }
+
+    return results;
+  }
+
+  analyze(symbols) {
+    const results = this.findPotentialSeeds(symbols);
+    
+    return {
+      hasPotentialRNG: results.candidates.length > 0,
+      bestMatch: results.bestMatch,
+      candidates: results.candidates,
+      matchingSequences: results.matchingSequences,
+      minSequenceLength: this.minSequenceLength
+    };
+  }
+}
+
 // Initialize analysis tools
 const analysisTools = {
   markovChain: new MarkovChain(),
@@ -1257,7 +1501,8 @@ const analysisTools = {
   monteCarlo: new MonteCarloAnalysis(),
   arima: new ARIMAAnalysis(),
   lstm: new LSTMAnalysis(),
-  hmm: new HMMAnalysis()
+  hmm: new HMMAnalysis(),
+  rng: new RNGAnalysis()
 };
 
 // Add models to hybrid ensemble
@@ -1300,15 +1545,28 @@ router.get('/', async (req, res) => {
         const result = await tool.analyze(symbols);
         const endTime = Date.now();
 
+        // Validate prediction before storing
+        const validPrediction = result.prediction !== null && 
+                              result.prediction !== undefined && 
+                              Number.isInteger(result.prediction) && 
+                              result.prediction >= 0 && 
+                              result.prediction <= 3;
+
         // Store prediction if we have valid data
-        if (latestSequenceId && result.prediction !== null) {
+        if (latestSequenceId && validPrediction) {
+          const confidence = Math.min(Math.max(result.confidence || 0, 0), 1);
           await db.storeModelPrediction(
             client,
             latestSequenceId,
             name,
             result.prediction,
-            result.confidence
+            confidence
           );
+        } else {
+          logger.warn(`Invalid prediction from ${name}:`, {
+            prediction: result.prediction,
+            confidence: result.confidence
+          });
         }
         
         analyses[name] = result;
@@ -1317,7 +1575,8 @@ router.get('/', async (req, res) => {
           debug: result.debug || [],
           error: result.error,
           symbolCount: symbols.length,
-          modelState: tool.modelState || null
+          modelState: tool.modelState || null,
+          predictionValid: validPrediction
         };
         
         logger.info(`${name} analysis completed in ${endTime - startTime}ms`);
@@ -1337,77 +1596,37 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // Get hybrid model prediction
-    const hybridPrediction = await hybridModel.getPrediction(symbols);
-
-    // Store hybrid model prediction if valid
-    if (latestSequenceId && hybridPrediction.prediction !== null) {
-      await db.storeModelPrediction(
-        client,
-        latestSequenceId,
-        'hybrid',
-        hybridPrediction.prediction,
-        hybridPrediction.confidence
-      );
+    // Get recent performance metrics for each model
+    const performanceMetrics = {};
+    for (const name of Object.keys(analysisTools)) {
+      try {
+        const metrics = await db.getModelPerformance(client, name, 1);
+        performanceMetrics[name] = metrics.rows[0] || {
+          accuracy: 0,
+          confidence_calibration: 0,
+          needs_retraining: false
+        };
+      } catch (error) {
+        logger.error(`Error fetching performance metrics for ${name}:`, error);
+      }
     }
 
     await client.query('COMMIT');
 
-    // Send back results with debug info
-    const response = {
-      symbols: symbols.length,
-      tools: Object.keys(analyses),
-      analyses: {
-        markovChain: {
-          matrix: analyses.markovChain?.matrix || {},
-          prediction: analyses.markovChain?.prediction,
-          confidence: analyses.markovChain?.confidence || 0
-        },
-        entropy: {
-          entropy: analyses.entropy?.entropy || 0,
-          prediction: analyses.entropy?.prediction,
-          confidence: analyses.entropy?.confidence || 0
-        },
-        chiSquare: {
-          chiSquare: analyses.chiSquare?.value || 0,
-          prediction: analyses.chiSquare?.prediction,
-          confidence: analyses.chiSquare?.confidence || 0
-        },
-        monteCarlo: {
-          prediction: analyses.monteCarlo?.prediction,
-          confidence: analyses.monteCarlo?.confidence || 0
-        },
-        arima: {
-          prediction: analyses.arima?.prediction,
-          confidence: analyses.arima?.confidence || 0,
-          params: analyses.arima?.params,
-          error: analyses.arima?.error
-        },
-        lstm: {
-          prediction: analyses.lstm?.prediction,
-          confidence: analyses.lstm?.confidence || 0,
-          probabilities: analyses.lstm?.probabilities || [],
-          isTraining: analyses.lstm?.isTraining || false
-        },
-        hmm: {
-          prediction: analyses.hmm?.prediction,
-          confidence: analyses.hmm?.confidence || 0,
-          stateSequence: analyses.hmm?.stateSequence || []
-        }
-      },
+    res.json({
+      message: 'Analysis complete',
+      symbols: symbols,
+      analyses: analyses,
       debug: debugInfo,
-      hybridPrediction
-    };
-
-    res.json(response);
+      performance: performanceMetrics
+    });
 
   } catch (error) {
     await client.query('ROLLBACK');
-    logger.error('Analysis error:', { error });
-    res.status(500).json({ 
+    logger.error('Analysis error:', error);
+    res.status(500).json({
       error: 'Analysis failed',
-      details: error.message,
-      stack: error.stack
+      message: error.message
     });
   } finally {
     client.release();
@@ -1526,6 +1745,13 @@ router.post('/analyze', async (req, res) => {
                 confidence: result.confidence,
                 probabilities: result.probabilities,
                 debug: result.debug
+              };
+            } else if (toolName === 'rng') {
+              results[internalName] = {
+                hasPotentialRNG: result.hasPotentialRNG,
+                bestMatch: result.bestMatch,
+                candidates: result.candidates,
+                matchingSequences: result.matchingSequences
               };
             } else {
               results[internalName] = {

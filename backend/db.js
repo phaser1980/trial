@@ -175,6 +175,10 @@ const dbUtils = {
     try {
       const values = [sequenceId, modelName, predictedSymbol, confidence];
       const result = await client.query(query, values);
+      
+      // After storing prediction, update model performance metrics
+      await this.updateModelPerformanceMetrics(client, modelName);
+      
       logger.info('Model prediction stored successfully', { 
         predictionId: result.rows[0].id,
         modelName,
@@ -195,20 +199,98 @@ const dbUtils = {
   // Function to update prediction correctness
   async updatePredictionCorrectness(client, actualSymbol) {
     logger.debug('Updating prediction correctness', { actualSymbol });
-    const query = `
+    
+    // First, update the was_correct field for recent predictions
+    const updateQuery = `
       UPDATE model_predictions 
       SET was_correct = (predicted_symbol = $1)
       WHERE created_at >= NOW() - INTERVAL '1 minute'
-      AND was_correct IS NULL;
+        AND was_correct IS NULL
+      RETURNING model_name;
     `;
+    
     try {
-      const result = await client.query(query, [actualSymbol]);
-      logger.info('Updated prediction correctness', { 
-        rowsUpdated: result.rowCount,
-        actualSymbol 
+      const result = await client.query(updateQuery, [actualSymbol]);
+      
+      // Get unique model names that were updated
+      const updatedModels = [...new Set(result.rows.map(row => row.model_name))];
+      
+      // Update performance metrics for each affected model
+      for (const modelName of updatedModels) {
+        await this.updateModelPerformanceMetrics(client, modelName);
+      }
+      
+      logger.info('Updated prediction correctness and performance metrics', {
+        actualSymbol,
+        updatedModels,
+        updatedCount: result.rowCount
       });
+      
+      return result.rowCount;
     } catch (error) {
       logger.error('Failed to update prediction correctness', { error, actualSymbol });
+      throw error;
+    }
+  },
+
+  // Function to update model performance metrics
+  async updateModelPerformanceMetrics(client, modelName) {
+    try {
+      // Calculate recent performance metrics
+      const metricsQuery = `
+        WITH recent_predictions AS (
+          SELECT 
+            COUNT(*) as total_predictions,
+            COUNT(*) FILTER (WHERE was_correct = true) as correct_predictions,
+            AVG(CASE WHEN was_correct = true THEN confidence ELSE 1 - confidence END) as confidence_calibration
+          FROM model_predictions
+          WHERE model_name = $1
+            AND created_at >= NOW() - INTERVAL '1 hour'
+            AND was_correct IS NOT NULL
+        )
+        SELECT 
+          total_predictions,
+          correct_predictions,
+          CASE 
+            WHEN total_predictions > 0 THEN correct_predictions::float / total_predictions 
+            ELSE 0 
+          END as accuracy,
+          confidence_calibration
+        FROM recent_predictions;
+      `;
+      
+      const metricsResult = await client.query(metricsQuery, [modelName]);
+      const metrics = metricsResult.rows[0];
+      
+      if (metrics.total_predictions > 0) {
+        // Store the performance metrics
+        const insertQuery = `
+          INSERT INTO model_performance 
+          (model_name, accuracy, confidence_calibration, sample_size, needs_retraining)
+          VALUES ($1, $2, $3, $4, $5);
+        `;
+        
+        const needsRetraining = metrics.accuracy < 0.5 || metrics.confidence_calibration < 0.6;
+        
+        await client.query(insertQuery, [
+          modelName,
+          metrics.accuracy,
+          metrics.confidence_calibration,
+          metrics.total_predictions,
+          needsRetraining
+        ]);
+        
+        // Refresh the materialized view
+        await this.refreshPerformanceView(client);
+        
+        logger.info('Updated model performance metrics', {
+          modelName,
+          metrics,
+          needsRetraining
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to update model performance metrics', { error, modelName });
       throw error;
     }
   },
