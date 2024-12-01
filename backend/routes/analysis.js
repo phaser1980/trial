@@ -69,6 +69,8 @@ class ModelManager {
     this.minWeight = 0.2;      // Minimum weight for any model
     this.confidenceWeight = 0.3; // Weight given to confidence scores
     this.lastActual = null; // Store last actual symbol for feedback
+    this.pool = require('../db').pool;
+    this.db = require('../db');
   }
 
   // Map display name to internal name
@@ -99,61 +101,88 @@ class ModelManager {
   }
 
   // Update accuracy for a specific model
-  updateAccuracy(modelName, predicted, actual, confidence = 0.25) {
+  async updateModelMetrics(modelName, prediction, actualSymbol) {
     const mappedName = this.mapModelName(modelName);
+    const wasCorrect = prediction.symbol === actualSymbol;
     
-    if (!this.recentAccuracy[mappedName]) {
-      console.error(`Unknown model name: ${modelName} (mapped to: ${mappedName})`);
-      return;
-    }
+    // Store prediction in database
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      // Store the prediction
+      const predictionId = await this.db.storeModelPrediction(
+        client,
+        prediction.sequenceId,
+        mappedName,
+        prediction.symbol,
+        prediction.confidence
+      );
 
-    // Calculate weighted accuracy based on confidence
-    const accuracy = predicted === actual ? 1 : 0;
-    const weightedAccuracy = accuracy * (1 + this.confidenceWeight * (confidence - 0.25));
-    
-    this.recentAccuracy[mappedName].push(weightedAccuracy);
-    this.confidenceScores[mappedName].push(confidence);
-    
-    // Keep only recent predictions
-    if (this.recentAccuracy[mappedName].length > this.windowSize) {
-      this.recentAccuracy[mappedName].shift();
-      this.confidenceScores[mappedName].shift();
-    }
+      // Update whether the prediction was correct
+      await this.db.updatePredictionCorrectness(client, predictionId, wasCorrect);
 
-    this.updateWeights();
+      // Update recent accuracy tracking
+      this.recentAccuracy[mappedName].push(wasCorrect ? 1 : 0);
+      this.confidenceScores[mappedName].push(prediction.confidence);
+      
+      // Trim arrays to window size
+      if (this.recentAccuracy[mappedName].length > this.windowSize) {
+        this.recentAccuracy[mappedName].shift();
+        this.confidenceScores[mappedName].shift();
+      }
+
+      // Calculate metrics
+      const accuracy = this.calculateAccuracy(mappedName);
+      const confidenceCalibration = this.calculateConfidenceCalibration(mappedName);
+      const needsRetraining = this.checkNeedsRetraining(mappedName);
+
+      // Store performance metrics
+      await this.db.storeModelPerformance(client, mappedName, {
+        accuracy,
+        confidenceCalibration,
+        sampleSize: this.recentAccuracy[mappedName].length,
+        needsRetraining
+      });
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error updating model metrics:', error);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  // Calculate recent accuracy for a model with exponential decay
-  getRecentAccuracy(modelName) {
-    const mappedName = this.mapModelName(modelName);
+  // Calculate accuracy for a model
+  calculateAccuracy(modelName) {
+    const accuracies = this.recentAccuracy[modelName];
+    if (!accuracies || accuracies.length === 0) return 0;
+    return accuracies.reduce((sum, val) => sum + val, 0) / accuracies.length;
+  }
+
+  // Calculate confidence calibration
+  calculateConfidenceCalibration(modelName) {
+    const accuracies = this.recentAccuracy[modelName];
+    const confidences = this.confidenceScores[modelName];
+    if (!accuracies || accuracies.length === 0) return 0;
     
-    // Safety check for undefined model
-    if (!this.recentAccuracy[mappedName]) {
-      console.error(`Unknown model name in getRecentAccuracy: ${modelName} (mapped to: ${mappedName})`);
-      return 0.25; // Default accuracy for unknown model
-    }
+    // Calculate average confidence and accuracy
+    const avgConfidence = confidences.reduce((sum, val) => sum + val, 0) / confidences.length;
+    const avgAccuracy = this.calculateAccuracy(modelName);
     
-    const accuracies = this.recentAccuracy[mappedName];
-    const confidences = this.confidenceScores[mappedName];
+    // Return absolute difference (lower is better)
+    return 1 - Math.abs(avgConfidence - avgAccuracy);
+  }
+
+  // Check if model needs retraining
+  checkNeedsRetraining(modelName) {
+    const accuracy = this.calculateAccuracy(modelName);
+    const calibration = this.calculateConfidenceCalibration(modelName);
     
-    if (!accuracies || !confidences || accuracies.length === 0) {
-      return 0.25; // Default accuracy for no data
-    }
-    
-    let weightedSum = 0;
-    let weightSum = 0;
-    const decayFactor = 0.9; // Exponential decay factor
-    
-    for (let i = accuracies.length - 1; i >= 0; i--) {
-      const age = accuracies.length - 1 - i;
-      const weight = Math.pow(decayFactor, age);
-      const confidence = confidences[i] || 0.25; // Default confidence if undefined
-      
-      weightedSum += accuracies[i] * weight * (1 + this.confidenceWeight * (confidence - 0.25));
-      weightSum += weight;
-    }
-    
-    return weightSum > 0 ? weightedSum / weightSum : 0.25;
+    // Model needs retraining if accuracy is below 0.6 or calibration is below 0.7
+    return accuracy < 0.6 || calibration < 0.7;
   }
 
   // Update weights based on recent performance and confidence
@@ -193,6 +222,39 @@ class ModelManager {
         this.modelWeights[model] /= totalWeight;
       }
     }
+  }
+
+  // Calculate recent accuracy for a model with exponential decay
+  getRecentAccuracy(modelName) {
+    const mappedName = this.mapModelName(modelName);
+    
+    // Safety check for undefined model
+    if (!this.recentAccuracy[mappedName]) {
+      console.error(`Unknown model name in getRecentAccuracy: ${modelName} (mapped to: ${mappedName})`);
+      return 0.25; // Default accuracy for unknown model
+    }
+    
+    const accuracies = this.recentAccuracy[mappedName];
+    const confidences = this.confidenceScores[mappedName];
+    
+    if (!accuracies || !confidences || accuracies.length === 0) {
+      return 0.25; // Default accuracy for no data
+    }
+    
+    let weightedSum = 0;
+    let weightSum = 0;
+    const decayFactor = 0.9; // Exponential decay factor
+    
+    for (let i = accuracies.length - 1; i >= 0; i--) {
+      const age = accuracies.length - 1 - i;
+      const weight = Math.pow(decayFactor, age);
+      const confidence = confidences[i] || 0.25; // Default confidence if undefined
+      
+      weightedSum += accuracies[i] * weight * (1 + this.confidenceWeight * (confidence - 0.25));
+      weightSum += weight;
+    }
+    
+    return weightSum > 0 ? weightedSum / weightSum : 0.25;
   }
 
   // Calculate stability of model performance

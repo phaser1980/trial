@@ -135,4 +135,82 @@ pool.on('error', (err, client) => {
   }
 })();
 
-module.exports = pool;
+// Function to store model prediction
+async function storeModelPrediction(client, sequenceId, modelName, predictedSymbol, confidence) {
+  const query = `
+    INSERT INTO model_predictions 
+    (sequence_id, model_name, predicted_symbol, confidence)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id;
+  `;
+  const values = [sequenceId, modelName, predictedSymbol, confidence];
+  const result = await client.query(query, values);
+  return result.rows[0].id;
+}
+
+// Function to update prediction correctness
+async function updatePredictionCorrectness(client, predictionId, wasCorrect) {
+  const query = `
+    UPDATE model_predictions 
+    SET was_correct = $1
+    WHERE id = $2;
+  `;
+  await client.query(query, [wasCorrect, predictionId]);
+}
+
+// Function to store model performance metrics
+async function storeModelPerformance(client, modelName, metrics) {
+  const query = `
+    INSERT INTO model_performance 
+    (model_name, accuracy, confidence_calibration, sample_size, needs_retraining)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id;
+  `;
+  const values = [
+    modelName,
+    metrics.accuracy,
+    metrics.confidenceCalibration,
+    metrics.sampleSize,
+    metrics.needsRetraining || false
+  ];
+  const result = await client.query(query, values);
+  return result.rows[0].id;
+}
+
+// Function to get recent model performance
+async function getModelPerformance(client, modelName, limit = 100) {
+  const query = `
+    SELECT *
+    FROM model_performance
+    WHERE model_name = $1
+    ORDER BY created_at DESC
+    LIMIT $2;
+  `;
+  const result = await client.query(query, [modelName, limit]);
+  return result.rows;
+}
+
+// Function to get model predictions accuracy
+async function getModelAccuracy(client, modelName, timeWindow = '24 hours') {
+  const query = `
+    SELECT 
+      COUNT(*) as total_predictions,
+      COUNT(*) FILTER (WHERE was_correct = true) as correct_predictions,
+      AVG(CASE WHEN was_correct = true THEN 1 ELSE 0 END) as accuracy,
+      AVG(confidence) as avg_confidence
+    FROM model_predictions
+    WHERE model_name = $1
+    AND created_at >= NOW() - INTERVAL $2;
+  `;
+  const result = await client.query(query, [modelName, timeWindow]);
+  return result.rows[0];
+}
+
+module.exports = {
+  pool,
+  storeModelPrediction,
+  updatePredictionCorrectness,
+  storeModelPerformance,
+  getModelPerformance,
+  getModelAccuracy
+};
