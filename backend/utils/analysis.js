@@ -1,16 +1,150 @@
 const math = require('mathjs');
 
-// Calculate Shannon entropy of a sequence
-const calculateEntropy = (sequence) => {
-  const frequencies = {};
-  sequence.forEach(symbol => {
-    frequencies[symbol] = (frequencies[symbol] || 0) + 1;
-  });
+// Calculate entropy of a sequence
+const calculateEntropy = (symbols) => {
+    const windowSize = 3;
+    const frequencies = new Map();
+    const patterns = new Map();
+    let totalPatterns = 0;
 
-  return Object.values(frequencies).reduce((entropy, freq) => {
-    const p = freq / sequence.length;
-    return entropy - (p * Math.log2(p));
-  }, 0);
+    // Calculate pattern frequencies with sliding window
+    for (let i = 0; i <= symbols.length - windowSize; i++) {
+        const pattern = symbols.slice(i, i + windowSize).join(',');
+        patterns.set(pattern, (patterns.get(pattern) || 0) + 1);
+        totalPatterns++;
+
+        // Track individual symbol frequencies
+        const symbol = symbols[i];
+        frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
+    }
+
+    // Calculate pattern entropy
+    let patternEntropy = 0;
+    patterns.forEach(count => {
+        const probability = count / totalPatterns;
+        patternEntropy -= probability * Math.log2(probability);
+    });
+
+    // Calculate symbol entropy
+    let symbolEntropy = 0;
+    frequencies.forEach(count => {
+        const probability = count / symbols.length;
+        symbolEntropy -= probability * Math.log2(probability);
+    });
+
+    // Normalize entropies
+    const maxPatternEntropy = Math.log2(Math.pow(4, windowSize)); // Maximum possible entropy for patterns
+    const maxSymbolEntropy = Math.log2(4); // Maximum possible entropy for individual symbols
+
+    const normalizedPatternEntropy = patternEntropy / maxPatternEntropy;
+    const normalizedSymbolEntropy = symbolEntropy / maxSymbolEntropy;
+
+    // Detect non-randomness
+    const entropyDifference = Math.abs(normalizedPatternEntropy - normalizedSymbolEntropy);
+    const patternStrength = 1 - normalizedPatternEntropy; // Higher when patterns are present
+
+    // Calculate prediction confidence
+    const confidence = Math.min(0.95, Math.max(0.25, 
+        0.5 + (entropyDifference * 0.3) + (patternStrength * 0.2)
+    ));
+
+    // Find most likely next symbol based on pattern matching
+    let prediction = null;
+    let maxPatternCount = 0;
+    const lastPattern = symbols.slice(-windowSize + 1).join(',');
+
+    patterns.forEach((count, pattern) => {
+        if (pattern.startsWith(lastPattern) && count > maxPatternCount) {
+            maxPatternCount = count;
+            prediction = Number(pattern.split(',').pop());
+        }
+    });
+
+    return {
+        prediction,
+        confidence,
+        entropy: normalizedPatternEntropy,
+        patternStrength,
+        debug: {
+            symbolEntropy: normalizedSymbolEntropy,
+            patternEntropy: normalizedPatternEntropy,
+            entropyDifference,
+            uniquePatterns: patterns.size,
+            totalPatterns
+        }
+    };
+};
+
+// Perform Chi-Square test for randomness
+const performChiSquareTest = (symbols) => {
+    const windowSize = 3;
+    const observed = new Map();
+    const expected = new Map();
+    let totalPatterns = 0;
+
+    // Calculate observed frequencies of patterns
+    for (let i = 0; i <= symbols.length - windowSize; i++) {
+        const pattern = symbols.slice(i, i + windowSize).join(',');
+        observed.set(pattern, (observed.get(pattern) || 0) + 1);
+        totalPatterns++;
+    }
+
+    // Calculate expected frequencies (uniform distribution)
+    const expectedFrequency = totalPatterns / Math.pow(4, windowSize);
+    observed.forEach((_, pattern) => {
+        expected.set(pattern, expectedFrequency);
+    });
+
+    // Calculate Chi-Square statistic
+    let chiSquare = 0;
+    observed.forEach((observedCount, pattern) => {
+        const expectedCount = expected.get(pattern);
+        chiSquare += Math.pow(observedCount - expectedCount, 2) / expectedCount;
+    });
+
+    // Calculate degrees of freedom
+    const degreesOfFreedom = Math.pow(4, windowSize) - 1;
+
+    // Calculate p-value using chi-square distribution
+    const pValue = 1 - math.chi2.cdf(chiSquare, degreesOfFreedom);
+
+    // Find most likely next pattern
+    let prediction = null;
+    let maxCount = 0;
+    const lastPattern = symbols.slice(-windowSize + 1).join(',');
+
+    observed.forEach((count, pattern) => {
+        if (pattern.startsWith(lastPattern) && count > maxCount) {
+            maxCount = count;
+            prediction = Number(pattern.split(',').pop());
+        }
+    });
+
+    // Calculate confidence based on multiple factors
+    const nonRandomnessStrength = 1 - pValue; // Higher when sequence is less random
+    const patternStrength = maxCount / totalPatterns;
+    const recentDataWeight = Math.min(1, symbols.length / 500);
+
+    const confidence = Math.min(0.95, Math.max(0.25,
+        (nonRandomnessStrength * 0.4) +
+        (patternStrength * 0.4) +
+        (recentDataWeight * 0.2)
+    ));
+
+    return {
+        prediction,
+        confidence,
+        isRandom: pValue > 0.05,
+        debug: {
+            chiSquare,
+            pValue,
+            degreesOfFreedom,
+            observedPatterns: observed.size,
+            totalPatterns,
+            nonRandomnessStrength,
+            patternStrength
+        }
+    };
 };
 
 // Calculate transition probability matrix
@@ -38,40 +172,36 @@ const calculateTransitionMatrix = (sequence) => {
   return matrix;
 };
 
-// Detect patterns using autocorrelation
-const detectPatterns = (sequence) => {
-  const maxLag = Math.min(20, Math.floor(sequence.length / 2));
-  const correlations = [];
+// Detect patterns in a sequence
+const detectPatterns = (symbols) => {
+    const results = {
+        entropy: calculateEntropy(symbols),
+        chiSquare: performChiSquareTest(symbols),
+        transitionMatrix: calculateTransitionMatrix(symbols)
+    };
 
-  for (let lag = 1; lag <= maxLag; lag++) {
-    let correlation = 0;
-    let n = sequence.length - lag;
+    // Combine predictions and confidences
+    const predictions = [
+        { pred: results.entropy.prediction, conf: results.entropy.confidence },
+        { pred: results.chiSquare.prediction, conf: results.chiSquare.confidence }
+    ];
 
-    for (let i = 0; i < n; i++) {
-      correlation += sequence[i] * sequence[i + lag];
-    }
+    // Weight predictions by confidence
+    let bestPrediction = null;
+    let maxConfidence = 0;
 
-    correlation /= n;
-    correlations.push({
-      lag,
-      correlation
+    predictions.forEach(({ pred, conf }) => {
+        if (pred !== null && conf > maxConfidence) {
+            maxConfidence = conf;
+            bestPrediction = pred;
+        }
     });
-  }
 
-  // Find significant patterns
-  const mean = math.mean(correlations.map(c => c.correlation));
-  const stdDev = math.std(correlations.map(c => c.correlation));
-  
-  const significantPatterns = correlations.filter(c => 
-    Math.abs(c.correlation - mean) > 2 * stdDev
-  );
-
-  return {
-    correlations,
-    significantPatterns,
-    patternConfidence: significantPatterns.length > 0 ? 
-      Math.max(...significantPatterns.map(p => Math.abs(p.correlation - mean) / stdDev)) / 3 : 0
-  };
+    return {
+        prediction: bestPrediction,
+        confidence: maxConfidence,
+        analysis: results
+    };
 };
 
 // Predict next symbol using recent history and transition matrix
@@ -114,12 +244,13 @@ const analyzePattern = (sequence) => {
 
   return {
     predictability: prediction.confidence,
-    patternConfidence: patterns.patternConfidence
+    patternConfidence: patterns.confidence
   };
 };
 
 module.exports = {
   calculateEntropy,
+  performChiSquareTest,
   calculateTransitionMatrix,
   detectPatterns,
   predictNextSymbol,

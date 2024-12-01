@@ -2,6 +2,8 @@
 const calculateMarkovChain = (symbols) => {
     const transitionMatrix = {};
     const transitionCounts = {};
+    const patternWeights = new Map();
+    const windowSize = 3;
     
     // Initialize matrices
     for (let i = 0; i < 4; i++) {
@@ -13,25 +15,85 @@ const calculateMarkovChain = (symbols) => {
         }
     }
 
-    // Count transitions
-    for (let i = 0; i < symbols.length - 1; i++) {
-        const current = symbols[i];
-        const next = symbols[i + 1];
+    // Count transitions with sliding window
+    for (let i = 0; i < symbols.length - windowSize; i++) {
+        const pattern = symbols.slice(i, i + windowSize);
+        const current = pattern[pattern.length - 2];
+        const next = pattern[pattern.length - 1];
+        
         transitionCounts[current][next]++;
+
+        // Track pattern frequencies
+        const patternKey = pattern.join(',');
+        patternWeights.set(patternKey, (patternWeights.get(patternKey) || 0) + 1);
     }
 
-    // Calculate probabilities
+    // Calculate probabilities with dynamic weighting
     for (let i = 0; i < 4; i++) {
         const totalTransitions = Object.values(transitionCounts[i]).reduce((a, b) => a + b, 0);
-        for (let j = 0; j < 4; j++) {
-            transitionMatrix[i][j] = totalTransitions ? 
-                transitionCounts[i][j] / totalTransitions : 0;
+        if (totalTransitions > 0) {
+            for (let j = 0; j < 4; j++) {
+                // Apply recency bias
+                const recentCount = transitionCounts[i][j];
+                const recentWeight = Math.min(1, recentCount / 10); // More weight to frequently seen transitions
+                transitionMatrix[i][j] = (recentCount / totalTransitions) * (1 + recentWeight);
+            }
+            
+            // Normalize probabilities
+            const sum = Object.values(transitionMatrix[i]).reduce((a, b) => a + b, 0);
+            for (let j = 0; j < 4; j++) {
+                transitionMatrix[i][j] /= sum;
+            }
+        } else {
+            // Use uniform distribution if no transitions observed
+            for (let j = 0; j < 4; j++) {
+                transitionMatrix[i][j] = 0.25;
+            }
         }
     }
 
     return {
         matrix: transitionMatrix,
-        predictability: calculatePredictabilityScore(transitionMatrix, symbols)
+        predictability: calculatePredictabilityScore(transitionMatrix, symbols, patternWeights)
+    };
+};
+
+// Helper function for Markov Chain analysis
+const calculatePredictabilityScore = (matrix, symbols, patternWeights) => {
+    // Calculate base predictability from transition probabilities
+    let maxProbabilities = [];
+    for (let i = 0; i < 4; i++) {
+        maxProbabilities.push(Math.max(...Object.values(matrix[i])));
+    }
+    
+    const baseScore = maxProbabilities.reduce((a, b) => a + b, 0) / 4;
+    
+    // Calculate pattern strength
+    const maxPatternCount = Math.max(...patternWeights.values());
+    const patternStrength = Math.min(0.3, maxPatternCount / symbols.length);
+    
+    // Calculate sequence length factor
+    const sequenceWeight = Math.min(1, symbols.length / 500);
+    
+    // Combine factors
+    const confidence = (baseScore * 0.6) + (patternStrength * 0.3) + (sequenceWeight * 0.1);
+    
+    // Find most likely next symbol
+    const lastSymbol = symbols[symbols.length - 1];
+    const probabilities = matrix[lastSymbol];
+    let prediction = 0;
+    let maxProb = 0;
+    
+    for (let i = 0; i < 4; i++) {
+        if (probabilities[i] > maxProb) {
+            maxProb = probabilities[i];
+            prediction = i;
+        }
+    }
+    
+    return {
+        symbol: prediction,
+        confidence: Math.min(0.95, confidence)
     };
 };
 
@@ -90,19 +152,6 @@ const calculateAutocorrelation = (symbols, lag = 1) => {
         hasPeriodicity: Math.abs(correlation) > 0.2,
         strength: Math.abs(correlation)
     };
-};
-
-// Helper function for Markov Chain analysis
-const calculatePredictabilityScore = (matrix, symbols) => {
-    let maxProbabilities = [];
-    for (let i = 0; i < 4; i++) {
-        maxProbabilities.push(Math.max(...Object.values(matrix[i])));
-    }
-    
-    // Improved confidence calculation for longer sequences
-    const baseScore = maxProbabilities.reduce((a, b) => a + b, 0) / 4;
-    const sequenceWeight = Math.min(1, symbols.length / 500); // Scale with sequence length up to 500
-    return baseScore * (1 + sequenceWeight);
 };
 
 // Dynamic confidence adjustment based on sequence length

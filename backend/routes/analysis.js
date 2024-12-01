@@ -453,7 +453,7 @@ class ModelManager {
     sequence.forEach(symbol => {
       frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
     });
-    
+
     return Array.from(frequencies.values()).reduce((entropy, freq) => {
       const p = freq / sequence.length;
       return entropy - p * Math.log2(p);
@@ -1300,15 +1300,45 @@ router.get('/', async (req, res) => {
       symbols: symbols.length,
       tools: Object.keys(analyses),
       analyses: {
-        ...analyses,
-        hybrid: {
-          prediction: hybridPrediction.prediction,
-          confidence: hybridPrediction.confidence,
-          modelWeights: hybridPrediction.weights,
-          individualPredictions: hybridPrediction.modelPredictions
+        markovChain: {
+          matrix: analyses.markovChain?.matrix || {},
+          prediction: analyses.markovChain?.prediction,
+          confidence: analyses.markovChain?.confidence || 0
+        },
+        entropy: {
+          entropy: analyses.entropy?.entropy || 0,
+          prediction: analyses.entropy?.prediction,
+          confidence: analyses.entropy?.confidence || 0
+        },
+        chiSquare: {
+          chiSquare: analyses.chiSquare?.value || 0,
+          prediction: analyses.chiSquare?.prediction,
+          confidence: analyses.chiSquare?.confidence || 0
+        },
+        monteCarlo: {
+          prediction: analyses.monteCarlo?.prediction,
+          confidence: analyses.monteCarlo?.confidence || 0
+        },
+        arima: {
+          prediction: analyses.arima?.prediction,
+          confidence: analyses.arima?.confidence || 0,
+          params: analyses.arima?.params,
+          error: analyses.arima?.error
+        },
+        lstm: {
+          prediction: analyses.lstm?.prediction,
+          confidence: analyses.lstm?.confidence || 0,
+          probabilities: analyses.lstm?.probabilities || [],
+          isTraining: analyses.lstm?.isTraining || false
+        },
+        hmm: {
+          prediction: analyses.hmm?.prediction,
+          confidence: analyses.hmm?.confidence || 0,
+          stateSequence: analyses.hmm?.stateSequence || []
         }
       },
-      debug: debugInfo
+      debug: debugInfo,
+      hybridPrediction
     };
 
     res.json(response);

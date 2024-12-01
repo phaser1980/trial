@@ -265,6 +265,22 @@ class ARIMAAnalysis extends AnalysisTool {
         }
     }
 
+    // Track tensors for cleanup
+    trackTensor(tensor) {
+        this.tensors.add(tensor);
+        return tensor;
+    }
+
+    // Cleanup tracked tensors
+    cleanup() {
+        this.tensors.forEach(tensor => {
+            if (tensor && tensor.dispose) {
+                tensor.dispose();
+            }
+        });
+        this.tensors.clear();
+    }
+
     // Main analysis function with enhanced error handling and validation
     async analyze(symbols) {
         try {

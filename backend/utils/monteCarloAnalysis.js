@@ -8,6 +8,8 @@ class MonteCarloAnalysis extends AnalysisTool {
         this.debugLog = [];
         this.seedCandidates = new Map(); // Track potential seed values
         this.symbolMap = ['♠', '♣', '♥', '♦'];
+        this.confidenceThreshold = 0.25; // Minimum confidence threshold
+        this.patternLength = 3; // Length of patterns to analyze
     }
 
     // Calculate transition probabilities from historical data
@@ -24,62 +26,45 @@ class MonteCarloAnalysis extends AnalysisTool {
             }
         }
 
-        // Count transitions using numeric indices
-        for (let i = 0; i < symbols.length - 1; i++) {
-            const current = symbols[i];
-            const next = symbols[i + 1];
+        // Count transitions with pattern analysis
+        for (let i = 0; i < symbols.length - this.patternLength; i++) {
+            const pattern = symbols.slice(i, i + this.patternLength);
+            const current = pattern[pattern.length - 2];
+            const next = pattern[pattern.length - 1];
             
-            // Validate symbols
             if (current < 0 || current > 3 || next < 0 || next > 3) {
-                console.error('[Monte Carlo] Invalid symbol in sequence:', { current, next });
                 continue;
             }
             
             matrix[current][next]++;
             counts[current]++;
-        }
-
-        // Add Laplace smoothing (add-one smoothing)
-        for (let i = 0; i < 4; i++) {
-            for (let j = 0; j < 4; j++) {
-                matrix[i][j] += 1; // Add 1 to all counts
-                counts[i] += 4;    // Add 4 to total (one for each possible next state)
+            
+            // Track potential seed patterns
+            const patternKey = pattern.join(',');
+            if (!this.seedCandidates.has(patternKey)) {
+                this.seedCandidates.set(patternKey, 1);
+            } else {
+                this.seedCandidates.set(patternKey, this.seedCandidates.get(patternKey) + 1);
             }
         }
 
-        // Convert to probabilities with validation
+        // Convert to probabilities with adaptive smoothing
         for (const from in matrix) {
             const totalCount = counts[from];
+            const smoothingFactor = Math.max(0.1, Math.min(1, totalCount / 100));
+            
             if (totalCount === 0) {
-                console.error('[Monte Carlo] Zero total count for symbol:', from);
-                // Use uniform distribution
                 for (const to in matrix[from]) {
                     matrix[from][to] = 0.25;
                 }
             } else {
                 for (const to in matrix[from]) {
-                    matrix[from][to] = matrix[from][to] / totalCount;
+                    // Apply adaptive smoothing
+                    const rawProb = matrix[from][to] / totalCount;
+                    matrix[from][to] = (rawProb * smoothingFactor) + (0.25 * (1 - smoothingFactor));
                 }
             }
-            
-            // Validate probabilities sum to 1
-            const sum = Object.values(matrix[from]).reduce((a, b) => a + b, 0);
-            if (Math.abs(sum - 1) > 0.0001) {
-                console.error('[Monte Carlo] Probabilities do not sum to 1:', { from, sum, probabilities: matrix[from] });
-            }
         }
-
-        // Log transition matrix statistics
-        console.log('[Monte Carlo] Transition Matrix Stats:', {
-            totalTransitions: Object.values(counts).reduce((a, b) => a + b, 0),
-            symbolCounts: counts,
-            probabilityRanges: Object.entries(matrix).map(([from, tos]) => ({
-                from,
-                min: Math.min(...Object.values(tos)),
-                max: Math.max(...Object.values(tos)),
-                avg: Object.values(tos).reduce((a, b) => a + b, 0) / 4
-            }))
-        });
 
         return matrix;
     }
@@ -170,14 +155,8 @@ class MonteCarloAnalysis extends AnalysisTool {
     async analyze(symbols) {
         try {
             this.debugLog = [];
-            console.log('[Monte Carlo] Starting analysis with symbols:', {
-                total: symbols.length,
-                last10: symbols.slice(-10),
-                lastSymbol: symbols[symbols.length - 1]
-            });
-
+            
             if (symbols.length < this.minSamples) {
-                console.log('[Monte Carlo] Insufficient data:', symbols.length);
                 return {
                     prediction: null,
                     confidence: 0,
@@ -186,27 +165,29 @@ class MonteCarloAnalysis extends AnalysisTool {
                 };
             }
 
-            // Calculate transition matrix
+            // Calculate transition matrix with pattern analysis
             const transitionMatrix = this.calculateTransitionMatrix(symbols);
-            console.log('[Monte Carlo] Transition Matrix:', transitionMatrix);
-
-            // Run simulations
-            const lastSymbol = symbols[symbols.length - 1];
+            const recentPattern = symbols.slice(-this.patternLength);
+            
+            // Run simulations with pattern matching
             const predictions = new Array(4).fill(0);
             let validSimulations = 0;
-
-            console.log('[Monte Carlo] Starting simulations with last symbol:', lastSymbol);
+            let maxPatternMatch = 0;
 
             for (let i = 0; i < this.simulationCount; i++) {
-                const simulation = this.runSimulation(transitionMatrix, lastSymbol, 2);
+                const simulation = this.runSimulation(transitionMatrix, recentPattern[recentPattern.length - 1], 2);
                 if (simulation && simulation.length === 2) {
                     predictions[simulation[1]]++;
                     validSimulations++;
+                    
+                    // Check if this matches a known pattern
+                    const simPattern = [...recentPattern.slice(1), simulation[1]].join(',');
+                    const patternCount = this.seedCandidates.get(simPattern) || 0;
+                    maxPatternMatch = Math.max(maxPatternMatch, patternCount);
                 }
             }
 
             if (validSimulations === 0) {
-                console.log('[Monte Carlo] No valid simulations completed');
                 return {
                     prediction: null,
                     confidence: 0,
@@ -215,67 +196,40 @@ class MonteCarloAnalysis extends AnalysisTool {
                 };
             }
 
-            console.log('[Monte Carlo] Simulation results:', {
-                predictions,
-                validSimulations,
-                distributionPercentages: predictions.map(p => (p/validSimulations * 100).toFixed(2) + '%')
-            });
-
-            // Find most likely next symbol
+            // Find most likely prediction
             let maxCount = 0;
             let prediction = null;
-            
-            for (let i = 0; i < predictions.length; i++) {
-                if (predictions[i] > maxCount) {
-                    maxCount = predictions[i];
-                    prediction = i;
+            let secondMaxCount = 0;
+
+            predictions.forEach((count, symbol) => {
+                if (count > maxCount) {
+                    secondMaxCount = maxCount;
+                    maxCount = count;
+                    prediction = symbol;
+                } else if (count > secondMaxCount) {
+                    secondMaxCount = count;
                 }
-            }
-
-            // Only make prediction if we have a clear winner
-            if (maxCount < validSimulations * 0.25) {
-                console.log('[Monte Carlo] No clear prediction pattern');
-                return {
-                    prediction: null,
-                    confidence: 0,
-                    message: 'No clear pattern',
-                    debug: {
-                        transitionMatrix,
-                        simulationResults: predictions,
-                        validSimulations,
-                        log: this.debugLog
-                    }
-                };
-            }
-
-            // Calculate confidence
-            const confidence = maxCount / validSimulations;
-            const adjustedConfidence = Math.min(0.95, confidence * (1 + this.getAccuracy()));
-
-            console.log('[Monte Carlo] Final prediction:', {
-                prediction,
-                rawConfidence: confidence,
-                adjustedConfidence,
-                symbol: prediction !== null ? ['♠', '♣', '♥', '♦'][prediction] : 'None'
             });
 
+            // Calculate confidence based on simulation distribution and pattern matches
+            const distributionConfidence = (maxCount - secondMaxCount) / validSimulations;
+            const patternConfidence = maxPatternMatch / this.minSamples;
+            const confidence = Math.min(1, Math.max(0, 
+                (distributionConfidence * 0.6) + (patternConfidence * 0.4)
+            ));
+
             return {
-                prediction,
-                confidence: adjustedConfidence,
-                debug: {
-                    transitionMatrix,
-                    simulationResults: predictions,
-                    validSimulations,
-                    log: this.debugLog
-                }
+                prediction: prediction,
+                confidence: confidence,
+                debug: this.debugLog
             };
 
         } catch (error) {
-            console.error('[Monte Carlo] Analysis error:', error);
+            console.error('Monte Carlo Analysis Error:', error);
             return {
                 prediction: null,
                 confidence: 0,
-                error: error.message,
+                message: error.message,
                 debug: this.debugLog
             };
         }

@@ -172,53 +172,44 @@ const transformMatrix = (matrixRecord: { [key: string]: { [key: string]: number 
 
 // Analysis data transformer
 function transformAnalysisData(backendData: BackendAnalysis | null): AnalysisData {
-  if (!backendData || !backendData.analyses) return {
-    markovChain: { confidence: 0 },
-    entropy: { confidence: 0 },
-    chiSquare: { confidence: 0 },
-    monteCarlo: { confidence: 0 },
-    arima: { confidence: 0 },
-    lstm: { confidence: 0 },
-    hmm: { confidence: 0 }
-  };
+  if (!backendData) return {};
+
+  const defaultConfidence = 0;
+
+  // Helper function to transform prediction data
+  const transformPrediction = (data: { prediction?: number | null, confidence?: number | null }) => ({
+    predictedNext: data.prediction !== null ? data.prediction : undefined,
+    confidence: data.confidence ?? defaultConfidence
+  });
 
   return {
-    markovChain: backendData.analyses.markovChain ? {
-      matrix: transformMatrix(backendData.analyses.markovChain.matrix),
-      predictedNext: backendData.analyses.markovChain.prediction,
-      confidence: backendData.analyses.markovChain.confidence || 0
-    } : { confidence: 0 },
-    entropy: backendData.analyses.entropy ? {
-      value: backendData.analyses.entropy.entropy,
-      predictedNext: backendData.analyses.entropy.prediction,
-      confidence: backendData.analyses.entropy.confidence || 0
-    } : { confidence: 0 },
-    chiSquare: backendData.analyses.chiSquare ? {
-      value: backendData.analyses.chiSquare.chiSquare,
-      predictedNext: backendData.analyses.chiSquare.prediction,
-      confidence: backendData.analyses.chiSquare.confidence || 0
-    } : { confidence: 0 },
-    monteCarlo: backendData.analyses.monteCarlo ? {
-      predictedNext: backendData.analyses.monteCarlo.prediction,
-      confidence: backendData.analyses.monteCarlo.confidence || 0
-    } : { confidence: 0 },
-    arima: backendData.analyses.arima ? {
-      predictedNext: backendData.analyses.arima.prediction,
-      confidence: backendData.analyses.arima.confidence || 0,
-      params: backendData.analyses.arima.params,
-      error: backendData.analyses.arima.error
-    } : { confidence: 0 },
-    lstm: backendData.analyses.lstm ? {
-      predictedNext: backendData.analyses.lstm.prediction,
-      confidence: backendData.analyses.lstm.confidence || 0,
-      probabilities: backendData.analyses.lstm.probabilities || [],
-      isTraining: backendData.analyses.lstm.isTraining || false
-    } : { confidence: 0, probabilities: [], isTraining: false },
-    hmm: backendData.analyses.hmm ? {
-      predictedNext: backendData.analyses.hmm.prediction,
-      confidence: backendData.analyses.hmm.confidence || 0,
-      stateSequence: backendData.analyses.hmm.stateSequence || []
-    } : { confidence: 0, stateSequence: [] }
+    markovChain: {
+      matrix: backendData.analyses.markovChain?.matrix ? transformMatrix(backendData.analyses.markovChain.matrix) : undefined,
+      ...transformPrediction(backendData.analyses.markovChain || {})
+    },
+    entropy: {
+      value: backendData.analyses.entropy?.entropy,
+      ...transformPrediction(backendData.analyses.entropy || {})
+    },
+    chiSquare: {
+      value: backendData.analyses.chiSquare?.chiSquare,
+      ...transformPrediction(backendData.analyses.chiSquare || {})
+    },
+    monteCarlo: transformPrediction(backendData.analyses.monteCarlo || {}),
+    arima: {
+      ...transformPrediction(backendData.analyses.arima || {}),
+      params: backendData.analyses.arima?.params,
+      error: backendData.analyses.arima?.error
+    },
+    lstm: {
+      ...transformPrediction(backendData.analyses.lstm || {}),
+      probabilities: backendData.analyses.lstm?.probabilities,
+      isTraining: backendData.analyses.lstm?.isTraining
+    },
+    hmm: {
+      ...transformPrediction(backendData.analyses.hmm || {}),
+      stateSequence: backendData.analyses.hmm?.stateSequence
+    }
   };
 }
 
@@ -355,6 +346,16 @@ const GameAnalysisPage: React.FC = () => {
       ).join('');
     };
 
+    const formatPrediction = (pred: number | undefined) => {
+      if (pred === undefined || pred === null) return 'N/A';
+      return symbols[pred] || '?';
+    };
+
+    const formatConfidence = (conf: number) => {
+      if (conf === undefined || conf === null) return 0;
+      return Math.max(0, Math.min(1, conf));
+    };
+
     return (
       <Paper 
         elevation={3} 
@@ -387,22 +388,25 @@ const GameAnalysisPage: React.FC = () => {
 
         <Box sx={{ mb: 2 }}>
           <Typography variant="body1" sx={{ mb: 0.5 }}>
-            Prediction: <strong>{
-              data.predictedNext !== undefined ? symbols[data.predictedNext] : '?'
-            }</strong>
+            Prediction: <strong>{formatPrediction(data.predictedNext)}</strong>
           </Typography>
           <Typography 
             variant="caption" 
             sx={{ 
               display: 'block',
               fontFamily: 'monospace',
-              color: data.confidence > 0.7 ? 'success.main' : 
-                data.confidence > 0.4 ? 'warning.main' : 'text.secondary'
+              color: formatConfidence(data.confidence) > 0.7 ? 'success.main' : 
+                formatConfidence(data.confidence) > 0.4 ? 'warning.main' : 'text.secondary'
             }}
           >
-            Confidence: {getConfidenceIndicator(data.confidence)}
-            {' '}({(data.confidence * 100).toFixed(0)}%)
+            Confidence: {getConfidenceIndicator(formatConfidence(data.confidence))}
+            {' '}({(formatConfidence(data.confidence) * 100).toFixed(0)}%)
           </Typography>
+          {data.error && (
+            <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
+              Error: {data.error}
+            </Typography>
+          )}
         </Box>
 
         {/* Model-specific details */}
