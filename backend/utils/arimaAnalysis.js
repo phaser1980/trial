@@ -10,57 +10,143 @@ class ARIMAAnalysis extends AnalysisTool {
         this.minSamples = 30;
         this.debugLog = [];
         this.tensors = new Set();
+        this.modelState = {
+            lastPrediction: null,
+            confidence: 0,
+            errorHistory: [],
+            needsRetraining: false
+        };
+        this.hyperparameters = {
+            learningRate: 0.01,
+            epochs: 100,
+            batchSize: 32,
+            validationSplit: 0.2
+        };
     }
 
-    // Keep track of tensors
-    trackTensor(tensor) {
-        this.tensors.add(tensor);
-        return tensor;
-    }
+    // Validate and clean input data
+    validateData(data) {
+        if (!Array.isArray(data) || data.length < this.minSamples) {
+            throw new Error(`Insufficient data: need at least ${this.minSamples} samples`);
+        }
 
-    // Clean up tensors
-    cleanup() {
-        this.tensors.forEach(tensor => {
-            if (tensor && tensor.dispose) {
-                tensor.dispose();
-            }
+        // Convert to numbers and handle invalid values
+        const cleaned = data.map(val => {
+            const num = Number(val);
+            return isNaN(num) ? null : num;
         });
-        this.tensors.clear();
+
+        // Handle missing values using interpolation
+        const interpolated = this.interpolateMissingValues(cleaned);
+        
+        if (interpolated.some(val => val === null || isNaN(val))) {
+            throw new Error('Unable to clean data: too many invalid values');
+        }
+
+        return interpolated;
     }
 
-    // Calculate differences
-    difference(data, order = 1) {
-        if (order === 0) return data;
-        const diffed = [];
-        for (let i = order; i < data.length; i++) {
-            diffed.push(data[i] - data[i - order]);
-        }
-        return diffed;
-    }
+    // Interpolate missing values
+    interpolateMissingValues(data) {
+        const result = [...data];
+        let start = 0;
 
-    // Inverse difference
-    inverseDifference(diffed, original, order = 1) {
-        const result = new Array(diffed.length + order).fill(0);
-        
-        // Copy original values for the first 'order' elements
-        for (let i = 0; i < order; i++) {
-            result[i] = original[i];
+        while (start < result.length) {
+            if (result[start] === null || isNaN(result[start])) {
+                // Find the next valid value
+                let end = start + 1;
+                while (end < result.length && (result[end] === null || isNaN(result[end]))) {
+                    end++;
+                }
+
+                // Interpolate between valid values
+                if (start > 0 && end < result.length) {
+                    const startVal = result[start - 1];
+                    const endVal = result[end];
+                    const step = (endVal - startVal) / (end - start + 1);
+                    
+                    for (let i = start; i < end; i++) {
+                        result[i] = startVal + step * (i - start + 1);
+                    }
+                } else {
+                    // Edge case: use nearest valid value
+                    const validValue = start > 0 ? result[start - 1] : result[end];
+                    result[start] = validValue;
+                }
+                start = end;
+            } else {
+                start++;
+            }
         }
-        
-        // Reconstruct the series
-        for (let i = order; i < result.length; i++) {
-            result[i] = diffed[i - order] + result[i - order];
-        }
-        
+
         return result;
     }
 
-    // Calculate moving average coefficients
+    // Enhanced difference calculation with error handling
+    difference(data, order = 1) {
+        if (order === 0) return data;
+        
+        try {
+            const diffed = [];
+            for (let i = order; i < data.length; i++) {
+                const diff = data[i] - data[i - order];
+                if (isNaN(diff)) {
+                    console.warn(`[ARIMA] NaN detected in difference calculation at index ${i}`);
+                    continue;
+                }
+                diffed.push(diff);
+            }
+            return diffed;
+        } catch (error) {
+            console.error('[ARIMA] Error in difference calculation:', error);
+            throw error;
+        }
+    }
+
+    // Enhanced inverse difference with validation
+    inverseDifference(diffed, original, order = 1) {
+        try {
+            const result = new Array(diffed.length + order).fill(0);
+            
+            // Validate and copy original values
+            for (let i = 0; i < order; i++) {
+                if (isNaN(original[i])) {
+                    throw new Error(`Invalid original value at index ${i}`);
+                }
+                result[i] = original[i];
+            }
+            
+            // Reconstruct the series with validation
+            for (let i = order; i < result.length; i++) {
+                const diff = diffed[i - order];
+                const prev = result[i - order];
+                
+                if (isNaN(diff) || isNaN(prev)) {
+                    throw new Error(`Invalid values detected at index ${i}`);
+                }
+                
+                result[i] = diff + prev;
+            }
+            
+            return result;
+        } catch (error) {
+            console.error('[ARIMA] Error in inverse difference:', error);
+            throw error;
+        }
+    }
+
+    // Enhanced MA calculation with regularization
     async calculateMA(data, order) {
         const X = [];
         const y = [];
         
+        // Prepare training data with validation
         for (let i = order; i < data.length; i++) {
+            if (data.slice(i - order, i).some(val => isNaN(val))) {
+                console.warn(`[ARIMA] Skipping invalid data at index ${i}`);
+                continue;
+            }
+            
             const row = [];
             for (let j = 1; j <= order; j++) {
                 row.push(data[i - j]);
@@ -69,155 +155,207 @@ class ARIMAAnalysis extends AnalysisTool {
             y.push(data[i]);
         }
         
-        // Use TensorFlow.js for linear regression
-        const xTensor = this.trackTensor(tf.tensor2d(X));
-        const yTensor = this.trackTensor(tf.tensor1d(y));
-        
-        const model = tf.sequential();
-        model.add(tf.layers.dense({ units: 1, inputShape: [order] }));
-        model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
-        
-        await model.fit(xTensor, yTensor, { epochs: 100, verbose: 0 });
-        const weights = model.layers[0].getWeights()[0].arraySync().map(w => w[0]);
-        
-        model.dispose();
-        return weights;
-    }
-
-    // Calculate autoregressive coefficients
-    async calculateAR(data, order) {
-        const X = [];
-        const y = [];
-        
-        for (let i = order; i < data.length; i++) {
-            const row = [];
-            for (let j = 1; j <= order; j++) {
-                row.push(data[i - j]);
-            }
-            X.push(row);
-            y.push(data[i]);
+        if (X.length === 0) {
+            throw new Error('No valid training data available');
         }
         
-        // Use TensorFlow.js for linear regression
+        // Use TensorFlow.js with enhanced model configuration
         const xTensor = this.trackTensor(tf.tensor2d(X));
         const yTensor = this.trackTensor(tf.tensor1d(y));
         
         const model = tf.sequential();
-        model.add(tf.layers.dense({ units: 1, inputShape: [order] }));
-        model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
+        model.add(tf.layers.dense({
+            units: 1,
+            inputShape: [order],
+            kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+            kernelInitializer: 'glorotNormal'
+        }));
         
-        await model.fit(xTensor, yTensor, { epochs: 100, verbose: 0 });
-        const weights = model.layers[0].getWeights()[0].arraySync().map(w => w[0]);
+        model.compile({
+            optimizer: tf.train.adam(this.hyperparameters.learningRate),
+            loss: 'meanSquaredError',
+            metrics: ['mse']
+        });
         
-        model.dispose();
-        return weights;
-    }
-
-    // Make prediction using ARIMA model
-    async predict(data) {
         try {
-            // Apply differencing
-            let diffed = data;
-            for (let i = 0; i < this.d; i++) {
-                diffed = this.difference(diffed);
-            }
+            const history = await model.fit(xTensor, yTensor, {
+                epochs: this.hyperparameters.epochs,
+                batchSize: this.hyperparameters.batchSize,
+                validationSplit: this.hyperparameters.validationSplit,
+                verbose: 0,
+                callbacks: {
+                    onEpochEnd: (epoch, logs) => {
+                        if (epoch % 10 === 0) {
+                            console.log(`[ARIMA] MA Training - Epoch ${epoch}: loss = ${logs.loss.toFixed(4)}`);
+                        }
+                    }
+                }
+            });
             
-            // Calculate AR and MA coefficients
-            const arCoeffs = await this.calculateAR(diffed, this.p);
-            const maCoeffs = await this.calculateMA(diffed, this.q);
+            const weights = model.layers[0].getWeights()[0].arraySync().map(w => w[0]);
+            model.dispose();
             
-            // Make prediction
-            let prediction = 0;
+            // Update model state
+            this.modelState.lastTrainingLoss = history.history.loss[history.history.loss.length - 1];
+            this.modelState.needsRetraining = this.modelState.lastTrainingLoss > 0.1;
             
-            // AR component
-            for (let i = 0; i < this.p; i++) {
-                prediction += arCoeffs[i] * diffed[diffed.length - 1 - i];
-            }
-            
-            // MA component
-            for (let i = 0; i < this.q; i++) {
-                prediction += maCoeffs[i] * diffed[diffed.length - 1 - i];
-            }
-            
-            // Inverse differencing
-            let result = prediction;
-            for (let i = this.d - 1; i >= 0; i--) {
-                const temp = this.inverseDifference([result], data.slice(-this.d), 1);
-                result = temp[temp.length - 1];
-            }
-            
-            // Convert to symbol index (0-3)
-            result = Math.round(result) % 4;
-            if (result < 0) result += 4;
-            
-            // Calculate confidence based on model fit
-            const confidence = Math.min(0.95, 0.5 + Math.abs(arCoeffs[0]));
-            
-            return { prediction: result, confidence };
-            
+            return weights;
         } catch (error) {
-            console.error('[ARIMA] Prediction error:', error);
-            return { prediction: null, confidence: 0.25 };
+            console.error('[ARIMA] Error in MA calculation:', error);
+            throw error;
         }
     }
 
+    // Enhanced AR calculation with validation and error tracking
+    async calculateAR(data, order) {
+        try {
+            const X = [];
+            const y = [];
+            
+            for (let i = order; i < data.length; i++) {
+                const row = [];
+                for (let j = 1; j <= order; j++) {
+                    row.push(data[i - j]);
+                }
+                X.push(row);
+                y.push(data[i]);
+            }
+            
+            const xTensor = this.trackTensor(tf.tensor2d(X));
+            const yTensor = this.trackTensor(tf.tensor1d(y));
+            
+            const model = tf.sequential();
+            model.add(tf.layers.dense({
+                units: 1,
+                inputShape: [order],
+                kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+                activation: 'linear'
+            }));
+            
+            model.compile({
+                optimizer: tf.train.adam(this.hyperparameters.learningRate),
+                loss: 'meanSquaredError'
+            });
+            
+            const history = await model.fit(xTensor, yTensor, {
+                epochs: this.hyperparameters.epochs,
+                batchSize: this.hyperparameters.batchSize,
+                validationSplit: this.hyperparameters.validationSplit,
+                verbose: 0
+            });
+            
+            const weights = model.layers[0].getWeights()[0].arraySync().map(w => w[0]);
+            model.dispose();
+            
+            // Track error history
+            this.modelState.errorHistory.push({
+                timestamp: Date.now(),
+                loss: history.history.loss[history.history.loss.length - 1]
+            });
+            
+            // Keep only recent error history
+            if (this.modelState.errorHistory.length > 100) {
+                this.modelState.errorHistory.shift();
+            }
+            
+            return weights;
+        } catch (error) {
+            console.error('[ARIMA] Error in AR calculation:', error);
+            throw error;
+        }
+    }
+
+    // Main analysis function with enhanced error handling and validation
     async analyze(symbols) {
         try {
-            this.debugLog = [];
-            this.debugLog.push(`Starting ARIMA analysis with ${symbols.length} symbols`);
-
             if (symbols.length < this.minSamples) {
-                this.debugLog.push(`Insufficient data: ${symbols.length} < ${this.minSamples}`);
                 return {
                     prediction: null,
-                    confidence: 0.25,
-                    message: 'Insufficient data',
-                    debug: this.debugLog
+                    confidence: 0,
+                    error: `Need at least ${this.minSamples} samples`
                 };
             }
 
-            // Convert symbols to numeric indices
-            const numericData = symbols.map(s => parseInt(s));
+            // Clean and validate input data
+            const data = this.validateData(symbols);
             
-            // Get prediction
-            const { prediction, confidence } = await this.predict(numericData);
+            // Calculate differences
+            const diffed = this.difference(data, this.d);
             
-            // Adjust confidence based on historical accuracy
-            const adjustedConfidence = Math.min(0.95, confidence * (1 + this.getAccuracy()));
-
-            this.debugLog.push(`Prediction results:`, {
-                prediction,
-                rawConfidence: confidence,
-                adjustedConfidence
-            });
-
-            // Update prediction history
-            this.addPrediction(prediction);
-
-            // Cleanup tensors
-            this.cleanup();
-
+            // Calculate AR and MA coefficients
+            const [arCoef, maCoef] = await Promise.all([
+                this.calculateAR(diffed, this.p),
+                this.calculateMA(diffed, this.q)
+            ]);
+            
+            // Make prediction
+            const prediction = await this.predict(data, arCoef, maCoef);
+            
+            // Calculate confidence based on recent performance
+            const confidence = this.calculateConfidence();
+            
+            // Update model state
+            this.modelState.lastPrediction = prediction;
+            this.modelState.confidence = confidence;
+            
             return {
                 prediction,
-                confidence: adjustedConfidence,
-                debug: {
-                    p: this.p,
-                    d: this.d,
-                    q: this.q,
-                    log: this.debugLog
-                }
+                confidence,
+                modelState: { ...this.modelState }
             };
-
         } catch (error) {
             console.error('[ARIMA] Analysis error:', error);
-            this.debugLog.push(`Error in analysis: ${error.message}`);
-            this.cleanup();
             return {
                 prediction: null,
-                confidence: 0.25,
-                error: error.message,
-                debug: this.debugLog
+                confidence: 0,
+                error: error.message
             };
+        } finally {
+            this.cleanup();
+        }
+    }
+
+    // Calculate prediction confidence based on error history
+    calculateConfidence() {
+        if (this.modelState.errorHistory.length === 0) return 0.5;
+        
+        const recentErrors = this.modelState.errorHistory.slice(-10);
+        const avgError = recentErrors.reduce((sum, e) => sum + e.loss, 0) / recentErrors.length;
+        
+        // Convert error to confidence score (0-1)
+        const confidence = Math.max(0, Math.min(1, 1 - avgError));
+        
+        // Adjust confidence based on training needs
+        return this.modelState.needsRetraining ? confidence * 0.8 : confidence;
+    }
+
+    // Enhanced prediction function
+    async predict(data, arCoef, maCoef) {
+        try {
+            // Use recent values for prediction
+            const recent = data.slice(-Math.max(this.p, this.q));
+            
+            // Calculate AR component
+            let arComponent = 0;
+            for (let i = 0; i < this.p; i++) {
+                arComponent += arCoef[i] * recent[recent.length - 1 - i];
+            }
+            
+            // Calculate MA component
+            let maComponent = 0;
+            for (let i = 0; i < this.q; i++) {
+                maComponent += maCoef[i] * recent[recent.length - 1 - i];
+            }
+            
+            // Combine components and handle inverse difference
+            const diffPrediction = arComponent + maComponent;
+            const prediction = this.inverseDifference([diffPrediction], recent, this.d);
+            
+            // Ensure prediction is within valid range (0-3)
+            return Math.max(0, Math.min(3, Math.round(prediction[prediction.length - 1])));
+        } catch (error) {
+            console.error('[ARIMA] Prediction error:', error);
+            throw error;
         }
     }
 }
