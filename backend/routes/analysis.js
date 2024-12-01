@@ -1323,7 +1323,7 @@ router.get('/', async (req, res) => {
         logger.info(`${name} analysis completed in ${endTime - startTime}ms`);
         
       } catch (error) {
-        logger.error(`Error in ${name} analysis:`, { error });
+        logger.error(`Error in ${name} analysis:`, error);
         analyses[name] = {
           prediction: null,
           confidence: 0,
@@ -1492,6 +1492,68 @@ router.get('/performance', async (req, res) => {
     });
   } finally {
     client.release();
+  }
+});
+
+router.post('/analyze', async (req, res) => {
+  try {
+    const { sequence } = req.body;
+    const client = await db.getClient();
+
+    // Validate sequence
+    if (!sequence || !Array.isArray(sequence)) {
+      return res.status(400).json({ error: 'Invalid sequence data' });
+    }
+
+    // Get model states
+    const modelStates = await modelManager.getModelStates();
+
+    // Run all enabled analyses
+    const results = {};
+    const analysisPromises = [];
+
+    for (const [toolName, tool] of Object.entries(analysisTools)) {
+      const internalName = modelManager.mapModelName(tool.name);
+      if (!modelStates[internalName]?.enabled) continue;
+
+      analysisPromises.push(
+        tool.analyze(sequence.map(s => parseInt(s.value)))
+          .then(result => {
+            if (toolName === 'monteCarlo') {
+              // Format Monte Carlo results for frontend
+              results[internalName] = {
+                predictedNext: result.prediction,
+                confidence: result.confidence,
+                probabilities: result.probabilities,
+                debug: result.debug
+              };
+            } else {
+              results[internalName] = {
+                predictedNext: result.prediction,
+                confidence: result.confidence
+              };
+            }
+          })
+          .catch(error => {
+            logger.error(`Error in ${toolName} analysis:`, error);
+            results[internalName] = {
+              error: error.message
+            };
+          })
+      );
+    }
+
+    await Promise.all(analysisPromises);
+
+    // Return results
+    res.json({
+      results,
+      modelStates
+    });
+
+  } catch (error) {
+    logger.error('Analysis error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

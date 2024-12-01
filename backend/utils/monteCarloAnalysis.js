@@ -182,6 +182,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             logger.debug('[Monte Carlo] Starting analysis', { symbolCount: symbols.length });
             
             if (symbols.length < this.minSamples) {
+                logger.warn('[Monte Carlo] Insufficient data length:', symbols.length);
                 return {
                     prediction: null,
                     confidence: 0,
@@ -201,6 +202,11 @@ class MonteCarloAnalysis extends AnalysisTool {
             let maxPatternMatch = 0;
             const simulationDebug = [];
 
+            logger.debug('[Monte Carlo] Starting simulations', {
+                total: this.simulationCount,
+                startSymbol: this.symbolMap[recentPattern[recentPattern.length - 1]]
+            });
+
             for (let i = 0; i < this.simulationCount; i++) {
                 const { sequence, debug } = this.runSimulation(
                     transitionMatrix, 
@@ -208,22 +214,34 @@ class MonteCarloAnalysis extends AnalysisTool {
                     2
                 );
 
-                if (sequence && sequence.length === 2) {
-                    predictions[sequence[1]]++;
-                    validSimulations++;
-                    
-                    // Check if this matches a known pattern
-                    const simPattern = [...recentPattern.slice(1), sequence[1]].join(',');
-                    const patternCount = this.seedCandidates.get(simPattern) || 0;
-                    maxPatternMatch = Math.max(maxPatternMatch, patternCount);
+                if (!sequence) {
+                    logger.warn('[Monte Carlo] Invalid simulation result at iteration:', i);
+                    continue;
+                }
 
-                    if (i < 10) { // Store first 10 simulations for debugging
-                        simulationDebug.push({
-                            simulation: i + 1,
-                            sequence: sequence.map(s => this.symbolMap[s]),
-                            ...debug
-                        });
+                if (sequence.length === 2) {
+                    const predictedSymbol = sequence[1];
+                    if (predictedSymbol >= 0 && predictedSymbol < this.numSymbols) {
+                        predictions[predictedSymbol]++;
+                        validSimulations++;
+                        
+                        // Check if this matches a known pattern
+                        const simPattern = [...recentPattern.slice(1), sequence[1]].join(',');
+                        const patternCount = this.seedCandidates.get(simPattern) || 0;
+                        maxPatternMatch = Math.max(maxPatternMatch, patternCount);
+
+                        if (i < 10) { // Store first 10 simulations for debugging
+                            simulationDebug.push({
+                                simulation: i + 1,
+                                sequence: sequence.map(s => this.symbolMap[s]),
+                                ...debug
+                            });
+                        }
+                    } else {
+                        logger.warn('[Monte Carlo] Invalid predicted symbol:', predictedSymbol);
                     }
+                } else {
+                    logger.warn('[Monte Carlo] Unexpected sequence length:', sequence.length);
                 }
             }
 
@@ -251,7 +269,11 @@ class MonteCarloAnalysis extends AnalysisTool {
 
             // Handle NaN values
             if (isNaN(maxProb) || isNaN(prediction)) {
-                logger.error('[Monte Carlo] NaN values detected in prediction');
+                logger.error('[Monte Carlo] NaN values detected in prediction', {
+                    maxProb,
+                    prediction,
+                    probabilities
+                });
                 return {
                     prediction: null,
                     confidence: 0,
@@ -274,7 +296,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             ));
 
             // Add final prediction details to debug log
-            this.debugLog.push({
+            const predictionDebug = {
                 type: 'prediction',
                 probabilities: Object.fromEntries(
                     probabilities.map((p, i) => [this.symbolMap[i], p])
@@ -297,20 +319,21 @@ class MonteCarloAnalysis extends AnalysisTool {
                         pattern: patternConfidence
                     }
                 }
-            });
+            };
+
+            this.debugLog.push(predictionDebug);
 
             logger.info('[Monte Carlo] Analysis complete', {
                 prediction: this.symbolMap[prediction],
                 confidence,
-                validSimulations
+                validSimulations,
+                probabilities: predictionDebug.probabilities
             });
 
             return {
                 prediction,
                 confidence,
-                probabilities: Object.fromEntries(
-                    probabilities.map((p, i) => [this.symbolMap[i], p])
-                ),
+                probabilities: predictionDebug.probabilities,
                 debug: this.debugLog
             };
 

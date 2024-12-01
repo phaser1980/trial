@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container,
   Grid,
@@ -10,7 +10,11 @@ import {
   CircularProgress,
   ButtonGroup,
   IconButton,
-  Tooltip
+  Tooltip,
+  Card,
+  LinearProgress,
+  Switch,
+  Chip
 } from '@mui/material';
 import UndoIcon from '@mui/icons-material/Undo';
 import InfoIcon from '@mui/icons-material/Info';
@@ -21,61 +25,198 @@ interface SequenceItem {
   created_at: string;
 }
 
-interface AnalysisData {
-  markovChain?: {
-    matrix?: number[][];
-    predictedNext?: number;
-    confidence: number;
-  };
-  entropy?: {
-    value?: number;
-    predictedNext?: number;
-    confidence: number;
-  };
-  chiSquare?: {
-    value?: number;
-    predictedNext?: number;
-    confidence: number;
-  };
-  monteCarlo?: {
-    predictedNext?: number;
-    confidence: number;
-    probabilities?: Record<string, number>;
-    debug?: MonteCarloDebug;
-  };
-  arima?: {
-    predictedNext?: number;
-    confidence: number;
-    params?: {
-      ar: number[];
-      d: number;
-      ma: number[];
+interface ErrorState {
+  message: string;
+  type: 'error' | 'warning' | 'info';
+}
+
+// Base type for all analyses
+interface BaseAnalysis {
+  predictedNext?: number;
+  confidence: number;
+  error?: string;
+}
+
+// Individual analysis types
+interface MarkovChainAnalysis extends BaseAnalysis {
+  matrix?: number[][];
+}
+
+interface EntropyAnalysis extends BaseAnalysis {
+  value?: number;
+}
+
+interface ChiSquareAnalysis extends BaseAnalysis {
+  value?: number;
+}
+
+interface MonteCarloAnalysis extends BaseAnalysis {
+  probabilities?: Record<string, number>;
+  debug?: {
+    type: string;
+    transition_matrix?: {
+      raw: Record<string, Record<string, number>>;
+      normalized: Record<string, Record<string, number>>;
+      counts: Record<string, number>;
     };
-    error?: string;
+    patterns?: {
+      significant: Array<{
+        pattern: string;
+        count: number;
+        positions: number[];
+        frequency: number;
+      }>;
+      expectedFrequency: number;
+    };
+    simulations?: {
+      total: number;
+      valid: number;
+      examples: Array<{
+        simulation: number;
+        sequence: string[];
+        steps: Array<{
+          current: string;
+          next: string;
+          probabilities: Record<string, number>;
+          random: number;
+        }>;
+      }>;
+    };
+    prediction?: {
+      probabilities: Record<string, number>;
+      entropy: {
+        raw: number;
+        normalized: number;
+        confidence: number;
+      };
+      pattern: {
+        maxMatch: number;
+        confidence: number;
+      };
+      final: {
+        prediction: string;
+        confidence: number;
+        components: {
+          probability: number;
+          entropy: number;
+          pattern: number;
+        };
+      };
+    };
   };
-  lstm?: {
-    predictedNext?: number;
-    confidence: number;
-    probabilities?: number[];
-    isTraining?: boolean;
+}
+
+interface ARIMAAnalysis extends BaseAnalysis {
+  params?: {
+    ar: number[];
+    d: number;
+    ma: number[];
   };
-  hmm?: {
-    predictedNext?: number;
-    confidence: number;
-    stateSequence?: number[];
-  };
+}
+
+interface LSTMAnalysis extends BaseAnalysis {
+  probabilities?: number[];
+  isTraining?: boolean;
+}
+
+interface HMMAnalysis extends BaseAnalysis {
+  stateSequence?: number[];
+}
+
+// Combined analysis data type
+interface AnalysisData {
+  markovChain?: MarkovChainAnalysis;
+  entropy?: EntropyAnalysis;
+  chiSquare?: ChiSquareAnalysis;
+  monteCarlo?: MonteCarloAnalysis;
+  arima?: ARIMAAnalysis;
+  lstm?: LSTMAnalysis;
+  hmm?: HMMAnalysis;
 }
 
 interface SequenceResponse {
   success: boolean;
   batchId: string;
-  sequence: SequenceItem;
+  sequence: SequenceItem[];
 }
 
-interface ErrorState {
-  message: string;
-  type: 'error' | 'warning' | 'info';
-  timestamp: number;
+interface ModelPerformance {
+  accuracy: number;
+  confidence: number;
+  totalPredictions: number;
+  correctPredictions: number;
+  lastPrediction?: number;
+  lastActual?: number;
+  wasCorrect?: boolean;
+}
+
+interface ModelState {
+  performance: ModelPerformance;
+  needsRetraining: boolean;
+  lastTrainingTime?: string;
+  error?: string;
+  enabled: boolean;
+}
+
+interface TransitionMatrixEntry {
+  raw: Record<string, Record<string, number>>;
+  normalized: Record<string, Record<string, number>>;
+  counts: Record<string, number>;
+}
+
+interface Pattern {
+  pattern: string;
+  count: number;
+  positions: number[];
+  frequency: number;
+}
+
+interface SimulationStep {
+  current: string;
+  next: string;
+  probabilities: Record<string, number>;
+  random: number;
+}
+
+interface SimulationExample {
+  simulation: number;
+  sequence: string[];
+  steps: SimulationStep[];
+}
+
+interface MonteCarloDebug {
+  type: string;
+  transition_matrix?: TransitionMatrixEntry;
+  patterns?: {
+    significant: Pattern[];
+    expectedFrequency: number;
+  };
+  simulations?: {
+    total: number;
+    valid: number;
+    examples: SimulationExample[];
+  };
+  prediction?: {
+    probabilities: Record<string, number>;
+    entropy: {
+      raw: number;
+      normalized: number;
+      confidence: number;
+    };
+    pattern: {
+      maxMatch: number;
+      confidence: number;
+    };
+    final: {
+      prediction: string;
+      confidence: number;
+      components: {
+        probability: number;
+        entropy: number;
+        pattern: number;
+      };
+    };
+  };
 }
 
 // Backend API response interface
@@ -172,125 +313,55 @@ const transformMatrix = (matrixRecord: { [key: string]: { [key: string]: number 
   );
 };
 
-// Analysis data transformer
-function transformAnalysisData(backendData: BackendAnalysis | null): AnalysisData {
-  if (!backendData) return {};
+// Transform functions
+function transformPrediction(data: any): BaseAnalysis {
+  return {
+    predictedNext: data.prediction !== undefined ? data.prediction : data.predictedNext,
+    confidence: data.confidence || 0,
+    error: data.error
+  };
+}
 
-  const defaultConfidence = 0;
-
-  // Helper function to transform prediction data
-  const transformPrediction = (data: { prediction?: number | null, confidence?: number | null }) => ({
-    predictedNext: data.prediction !== null ? data.prediction : undefined,
-    confidence: data.confidence ?? defaultConfidence
-  });
+function transformAnalysisData(backendData: any): AnalysisData {
+  if (!backendData?.analyses) return {};
 
   return {
-    markovChain: {
-      matrix: backendData.analyses.markovChain?.matrix ? transformMatrix(backendData.analyses.markovChain.matrix) : undefined,
-      ...transformPrediction(backendData.analyses.markovChain || {})
-    },
-    entropy: {
-      value: backendData.analyses.entropy?.entropy,
-      ...transformPrediction(backendData.analyses.entropy || {})
-    },
-    chiSquare: {
-      value: backendData.analyses.chiSquare?.chiSquare,
-      ...transformPrediction(backendData.analyses.chiSquare || {})
-    },
-    monteCarlo: transformPrediction(backendData.analyses.monteCarlo || {}),
-    arima: {
-      ...transformPrediction(backendData.analyses.arima || {}),
-      params: backendData.analyses.arima?.params,
-      error: backendData.analyses.arima?.error
-    },
-    lstm: {
-      ...transformPrediction(backendData.analyses.lstm || {}),
-      probabilities: backendData.analyses.lstm?.probabilities,
-      isTraining: backendData.analyses.lstm?.isTraining
-    },
-    hmm: {
-      ...transformPrediction(backendData.analyses.hmm || {}),
-      stateSequence: backendData.analyses.hmm?.stateSequence
-    }
-  };
-}
-
-// Model performance tracking interface
-interface ModelPerformance {
-  accuracy: number;
-  confidence: number;
-  totalPredictions: number;
-  correctPredictions: number;
-  lastPrediction?: number;
-  lastActual?: number;
-  wasCorrect?: boolean;
-}
-
-interface ModelState {
-  performance: ModelPerformance;
-  needsRetraining: boolean;
-  lastTrainingTime?: string;
-  error?: string;
-}
-
-interface TransitionMatrixEntry {
-  raw: Record<string, Record<string, number>>;
-  normalized: Record<string, Record<string, number>>;
-  counts: Record<string, number>;
-}
-
-interface Pattern {
-  pattern: string;
-  count: number;
-  positions: number[];
-  frequency: number;
-}
-
-interface SimulationStep {
-  current: string;
-  next: string;
-  probabilities: Record<string, number>;
-  random: number;
-}
-
-interface SimulationExample {
-  simulation: number;
-  sequence: string[];
-  steps: SimulationStep[];
-}
-
-interface MonteCarloDebug {
-  type: string;
-  transition_matrix?: TransitionMatrixEntry;
-  patterns?: {
-    significant: Pattern[];
-    expectedFrequency: number;
-  };
-  simulations?: {
-    total: number;
-    valid: number;
-    examples: SimulationExample[];
-  };
-  prediction?: {
-    probabilities: Record<string, number>;
-    entropy: {
-      raw: number;
-      normalized: number;
-      confidence: number;
-    };
-    pattern: {
-      maxMatch: number;
-      confidence: number;
-    };
-    final: {
-      prediction: string;
-      confidence: number;
-      components: {
-        probability: number;
-        entropy: number;
-        pattern: number;
-      };
-    };
+    markovChain: backendData.analyses.markovChain ? {
+      ...transformPrediction(backendData.analyses.markovChain),
+      matrix: backendData.analyses.markovChain.matrix
+    } : undefined,
+    
+    entropy: backendData.analyses.entropy ? {
+      ...transformPrediction(backendData.analyses.entropy),
+      value: backendData.analyses.entropy.value
+    } : undefined,
+    
+    chiSquare: backendData.analyses.chiSquare ? {
+      ...transformPrediction(backendData.analyses.chiSquare),
+      value: backendData.analyses.chiSquare.value
+    } : undefined,
+    
+    monteCarlo: backendData.analyses.monteCarlo ? {
+      ...transformPrediction(backendData.analyses.monteCarlo),
+      probabilities: backendData.analyses.monteCarlo.probabilities,
+      debug: backendData.analyses.monteCarlo.debug
+    } : undefined,
+    
+    arima: backendData.analyses.arima ? {
+      ...transformPrediction(backendData.analyses.arima),
+      params: backendData.analyses.arima.params
+    } : undefined,
+    
+    lstm: backendData.analyses.lstm ? {
+      ...transformPrediction(backendData.analyses.lstm),
+      probabilities: backendData.analyses.lstm.probabilities,
+      isTraining: backendData.analyses.lstm.isTraining
+    } : undefined,
+    
+    hmm: backendData.analyses.hmm ? {
+      ...transformPrediction(backendData.analyses.hmm),
+      stateSequence: backendData.analyses.hmm.stateSequence
+    } : undefined
   };
 }
 
@@ -306,11 +377,21 @@ const GameAnalysisPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    // Initialize model states
+    setModelStates({
+      markovChain: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      entropy: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      chiSquare: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      monteCarlo: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      arima: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      lstm: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true },
+      hmm: { performance: { accuracy: 0, confidence: 0, totalPredictions: 0, correctPredictions: 0 }, needsRetraining: false, enabled: true }
+    });
   }, []);
 
   const handleError = (message: string) => {
     console.error(message);
-    setError({ message, type: 'error', timestamp: Date.now() });
+    setError({ message, type: 'error' });
   };
 
   const loadData = async () => {
@@ -396,85 +477,123 @@ const GameAnalysisPage: React.FC = () => {
     }
   };
 
-  const renderModelBox = (name: string, data: any, performance?: ModelPerformance) => {
-    const getAccuracyColor = (accuracy: number) => {
-      if (accuracy >= 0.7) return 'success.main';
-      if (accuracy >= 0.5) return 'warning.main';
-      return 'error.main';
-    };
+  const fetchAnalysis = useCallback(async () => {
+    if (sequence.length < 10) return;
 
-    const getConfidenceIndicator = (confidence: number) => {
-      const bars = Math.floor(confidence * 5);
-      return Array(5).fill('▢').map((char, i) => 
-        i < bars ? '▣' : char
-      ).join('');
-    };
+    setLoading(true);
+    try {
+      const response = await fetch('/api/analysis/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sequence }),
+      });
 
-    const formatPrediction = (pred: number | undefined) => {
-      if (pred === undefined || pred === null) return 'N/A';
-      return symbols[pred] || '?';
-    };
+      if (!response.ok) {
+        throw new Error('Analysis request failed');
+      }
 
-    const formatConfidence = (conf: number) => {
-      if (conf === undefined || conf === null) return 0;
-      return Math.max(0, Math.min(1, conf));
-    };
+      const data = await response.json();
+      setAnalysisData(transformAnalysisData(data));
+      setModelStates(data.modelStates);
+    } catch (error) {
+      console.error('Analysis error:', error);
+      setError({ 
+        message: error instanceof Error ? error.message : 'Unknown error',
+        type: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [sequence]);
+
+  const renderAnalysisCard = (type: string, data: any) => {
+    if (!data || data.error) return null;
+
+    const displayName = {
+      markovChain: 'Markov Chain',
+      entropy: 'Entropy Analysis',
+      chiSquare: 'Chi-Square Test',
+      monteCarlo: 'Monte Carlo',
+      arima: 'ARIMA',
+      lstm: 'LSTM',
+      hmm: 'HMM'
+    }[type] || type;
 
     return (
-      <Paper 
-        elevation={3} 
-        sx={{ 
-          p: 2,
-          height: '100%',
-          backgroundColor: data.type === 'lstm' && (data as any).isTraining ? 
-            'rgba(25, 118, 210, 0.04)' : 'background.paper',
-          border: '1px solid',
-          borderColor: performance?.wasCorrect ? 'success.light' : 
-            performance?.wasCorrect === false ? 'error.light' : 'divider'
-        }}
-      >
+      <Card sx={{ mb: 2, p: 2 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-          <Typography variant="h6" component="h3">
-            {name}
+          <Typography variant="h6" component="div">
+            {displayName}
           </Typography>
-          {performance && (
-            <Typography 
-              variant="body2" 
-              sx={{ 
-                color: getAccuracyColor(performance.accuracy),
-                fontWeight: 'bold'
-              }}
-            >
-              {(performance.accuracy * 100).toFixed(1)}%
-            </Typography>
+          {modelStates[type]?.enabled !== undefined && (
+            <Switch
+              checked={modelStates[type]?.enabled}
+              onChange={(e) => handleModelToggle(type, e.target.checked)}
+              size="small"
+            />
           )}
         </Box>
 
-        <Box sx={{ mb: 2 }}>
-          <Typography variant="body1" sx={{ mb: 0.5 }}>
-            Prediction: <strong>{formatPrediction(data.predictedNext)}</strong>
+        {/* Prediction Display */}
+        <Box sx={{ mb: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            Prediction:
           </Typography>
-          <Typography 
-            variant="caption" 
-            sx={{ 
-              display: 'block',
-              fontFamily: 'monospace',
-              color: formatConfidence(data.confidence) > 0.7 ? 'success.main' : 
-                formatConfidence(data.confidence) > 0.4 ? 'warning.main' : 'text.secondary'
+          <Typography variant="h4" component="div" sx={{ fontFamily: 'monospace' }}>
+            {data.predictedNext !== undefined && data.predictedNext !== null
+              ? symbols[data.predictedNext]
+              : 'N/A'}
+          </Typography>
+        </Box>
+
+        {/* Confidence Bar */}
+        <Box sx={{ mb: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            Confidence: {(data.confidence * 100).toFixed(1)}%
+          </Typography>
+          <LinearProgress
+            variant="determinate"
+            value={data.confidence * 100}
+            sx={{
+              height: 8,
+              borderRadius: 1,
+              bgcolor: 'background.default',
+              '& .MuiLinearProgress-bar': {
+                bgcolor: data.confidence > 0.7 ? 'success.main' : data.confidence > 0.4 ? 'warning.main' : 'error.main',
+              },
             }}
-          >
-            Confidence: {getConfidenceIndicator(formatConfidence(data.confidence))}
-            {' '}({(formatConfidence(data.confidence) * 100).toFixed(0)}%)
-          </Typography>
-          {data.error && (
-            <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
-              Error: {data.error}
-            </Typography>
-          )}
+          />
         </Box>
 
-        {/* Model-specific details */}
-        {data.type === 'monteCarlo' && data.debug && (
+        {/* Symbol Probabilities */}
+        {type === 'monteCarlo' && data.debug?.prediction?.probabilities && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2">Symbol Probabilities</Typography>
+            <Box sx={{ 
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 1,
+              mt: 1
+            }}>
+              {Object.entries(data.debug.prediction.probabilities as Record<string, number>).map(([symbol, prob]) => (
+                <Chip
+                  key={symbol}
+                  label={`${symbol}: ${(prob * 100).toFixed(1)}%`}
+                  size="small"
+                  sx={{
+                    bgcolor: 'background.default',
+                    fontFamily: 'monospace'
+                  }}
+                />
+              ))}
+            </Box>
+          </Box>
+        )}
+
+        {/* Monte Carlo Debug Info */}
+        {type === 'monteCarlo' && data.debug && (
           <Box sx={{ mt: 2 }}>
             {/* Transition Matrix */}
             {data.debug.transition_matrix && (
@@ -503,7 +622,7 @@ const GameAnalysisPage: React.FC = () => {
             )}
 
             {/* Patterns */}
-            {data.debug.patterns && data.debug.patterns.significant.length > 0 && (
+            {data.debug.patterns?.significant.length > 0 && (
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2">Significant Patterns</Typography>
                 <Box sx={{ 
@@ -515,7 +634,7 @@ const GameAnalysisPage: React.FC = () => {
                   maxHeight: '100px',
                   overflow: 'auto'
                 }}>
-                  {data.debug.patterns.significant.slice(0, 3).map((pattern: Pattern, i: number) => (
+                  {data.debug.patterns.significant.slice(0, 3).map((pattern: any, i: number) => (
                     <div key={i}>
                       {pattern.pattern}: {pattern.count}x ({(pattern.frequency * 100).toFixed(1)}%)
                     </div>
@@ -539,7 +658,7 @@ const GameAnalysisPage: React.FC = () => {
                   maxHeight: '100px',
                   overflow: 'auto'
                 }}>
-                  {data.debug.simulations.examples.slice(0, 3).map((sim: SimulationExample, i: number) => (
+                  {data.debug.simulations.examples.slice(0, 3).map((sim: any, i: number) => (
                     <div key={i}>
                       #{sim.simulation}: {sim.sequence.join(' → ')}
                     </div>
@@ -568,93 +687,47 @@ const GameAnalysisPage: React.FC = () => {
           </Box>
         )}
 
-        {data.type === 'lstm' && (
+        {/* Model-specific details */}
+        {type === 'lstm' && data.isTraining && (
           <Box sx={{ mt: 1 }}>
-            {(data as any).isTraining ? (
-              <Typography variant="body2" color="primary.main">
-                Training in progress...
-              </Typography>
-            ) : (
-              (data as any).probabilities && (
-                <Box sx={{ 
-                  mt: 1, 
-                  p: 1, 
-                  bgcolor: 'background.default',
-                  borderRadius: 1,
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem'
-                }}>
-                  {symbols.map((s, i) => (
-                    <div key={i}>
-                      {s}: {((data as any).probabilities[i] * 100).toFixed(1)}%
-                    </div>
-                  ))}
-                </Box>
-              )
-            )}
-          </Box>
-        )}
-
-        {data.type === 'arima' && (data as any).params && (
-          <Box sx={{ mt: 1 }}>
-            <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-              AR: [{(data as any).params.ar.map((v: number) => v.toFixed(2)).join(', ')}]
-              <br/>
-              MA: [{(data as any).params.ma.map((v: number) => v.toFixed(2)).join(', ')}]
+            <Typography variant="body2" color="warning.main">
+              Model is currently training...
             </Typography>
           </Box>
         )}
 
-        {data.type === 'hmm' && (data as any).stateSequence && (
+        {type === 'arima' && data.params && (
           <Box sx={{ mt: 1 }}>
-            <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-              States: {(data as any).stateSequence.slice(-3).join(' → ')}
+            <Typography variant="body2" color="text.secondary">
+              Parameters: AR({data.params.ar.join(',')}), I({data.params.d}), MA({data.params.ma.join(',')})
             </Typography>
           </Box>
         )}
 
-        {/* Performance metrics */}
-        {performance && (
-          <Box 
-            sx={{ 
-              mt: 2,
-              pt: 1,
-              borderTop: '1px solid',
-              borderColor: 'divider'
-            }}
-          >
-            <Typography variant="caption" display="block" color="text.secondary">
-              Total Predictions: {performance.totalPredictions}
-            </Typography>
-            <Typography variant="caption" display="block" color="text.secondary">
-              Correct: {performance.correctPredictions}
-            </Typography>
-            {performance.lastPrediction !== undefined && (
-              <Typography 
-                variant="caption" 
-                display="block" 
-                sx={{ 
-                  color: performance.wasCorrect ? 'success.main' : 'error.main',
-                  fontWeight: 'medium'
-                }}
-              >
-                Last: {symbols[performance.lastPrediction]} → {
-                  performance.lastActual !== undefined ? 
-                    symbols[performance.lastActual] : '?'
-                }
-              </Typography>
-            )}
-          </Box>
+        {data.error && (
+          <Typography variant="body2" color="error">
+            Error: {data.error}
+          </Typography>
         )}
-      </Paper>
+      </Card>
     );
+  };
+
+  const handleModelToggle = (type: string, checked: boolean) => {
+    setModelStates(prev => ({
+      ...prev,
+      [type]: {
+        ...prev[type],
+        enabled: checked
+      }
+    }));
   };
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {error && (
         <Alert 
-          severity={error.type}
+          severity={error.type === 'error' ? 'error' : 'warning'}
           onClose={() => setError(null)}
           sx={{ mb: 2 }}
         >
@@ -740,7 +813,7 @@ const GameAnalysisPage: React.FC = () => {
                   'Chi-Square': { type: 'chiSquare', ...analysisData.chiSquare }
                 } as Record<string, any>).map(([name, data]) => (
                   <Grid item xs={12} sm={6} md={4} key={name}>
-                    {renderModelBox(name, data, modelStates[name]?.performance)}
+                    {renderAnalysisCard(name, data)}
                   </Grid>
                 ))}
               </Grid>
@@ -768,7 +841,7 @@ const GameAnalysisPage: React.FC = () => {
                     } : {})
                   } as Record<string, any>).map(([name, data]) => (
                     <Grid item xs={12} sm={6} md={4} key={name}>
-                      {renderModelBox(name, data, modelStates[name]?.performance)}
+                      {renderAnalysisCard(name, data)}
                     </Grid>
                   ))}
                 </Grid>
