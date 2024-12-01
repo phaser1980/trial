@@ -40,6 +40,8 @@ interface AnalysisData {
   monteCarlo?: {
     predictedNext?: number;
     confidence: number;
+    probabilities?: Record<string, number>;
+    debug?: MonteCarloDebug;
   };
   arima?: {
     predictedNext?: number;
@@ -231,6 +233,67 @@ interface ModelState {
   error?: string;
 }
 
+interface TransitionMatrixEntry {
+  raw: Record<string, Record<string, number>>;
+  normalized: Record<string, Record<string, number>>;
+  counts: Record<string, number>;
+}
+
+interface Pattern {
+  pattern: string;
+  count: number;
+  positions: number[];
+  frequency: number;
+}
+
+interface SimulationStep {
+  current: string;
+  next: string;
+  probabilities: Record<string, number>;
+  random: number;
+}
+
+interface SimulationExample {
+  simulation: number;
+  sequence: string[];
+  steps: SimulationStep[];
+}
+
+interface MonteCarloDebug {
+  type: string;
+  transition_matrix?: TransitionMatrixEntry;
+  patterns?: {
+    significant: Pattern[];
+    expectedFrequency: number;
+  };
+  simulations?: {
+    total: number;
+    valid: number;
+    examples: SimulationExample[];
+  };
+  prediction?: {
+    probabilities: Record<string, number>;
+    entropy: {
+      raw: number;
+      normalized: number;
+      confidence: number;
+    };
+    pattern: {
+      maxMatch: number;
+      confidence: number;
+    };
+    final: {
+      prediction: string;
+      confidence: number;
+      components: {
+        probability: number;
+        entropy: number;
+        pattern: number;
+      };
+    };
+  };
+}
+
 const GameAnalysisPage: React.FC = () => {
   const [sequence, setSequence] = useState<SequenceItem[]>([]);
   const [analysisData, setAnalysisData] = useState<AnalysisData>({});
@@ -411,11 +474,97 @@ const GameAnalysisPage: React.FC = () => {
         </Box>
 
         {/* Model-specific details */}
-        {data.type === 'markov' && data.matrix && (
-          <Box sx={{ mt: 1 }}>
-            <Typography variant="body2" color="text.secondary">
-              Matrix: {data.matrix.length}x{data.matrix[0]?.length}
-            </Typography>
+        {data.type === 'monteCarlo' && data.debug && (
+          <Box sx={{ mt: 2 }}>
+            {/* Transition Matrix */}
+            {data.debug.transition_matrix && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2">Transition Matrix</Typography>
+                <Box sx={{ 
+                  p: 1, 
+                  bgcolor: 'background.default',
+                  borderRadius: 1,
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                  maxHeight: '100px',
+                  overflow: 'auto'
+                }}>
+                  {Object.entries(data.debug.transition_matrix.normalized).map(([from, to]) => (
+                    <div key={from}>
+                      {symbols[parseInt(from)]} → {
+                        Object.entries(to as Record<string, number>)
+                          .map(([sym, prob]) => `${symbols[parseInt(sym)]}: ${(prob * 100).toFixed(1)}%`)
+                          .join(' | ')
+                      }
+                    </div>
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* Patterns */}
+            {data.debug.patterns && data.debug.patterns.significant.length > 0 && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2">Significant Patterns</Typography>
+                <Box sx={{ 
+                  p: 1, 
+                  bgcolor: 'background.default',
+                  borderRadius: 1,
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                  maxHeight: '100px',
+                  overflow: 'auto'
+                }}>
+                  {data.debug.patterns.significant.slice(0, 3).map((pattern: Pattern, i: number) => (
+                    <div key={i}>
+                      {pattern.pattern}: {pattern.count}x ({(pattern.frequency * 100).toFixed(1)}%)
+                    </div>
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* Simulation Examples */}
+            {data.debug.simulations && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2">
+                  Simulations ({data.debug.simulations.valid}/{data.debug.simulations.total} valid)
+                </Typography>
+                <Box sx={{ 
+                  p: 1, 
+                  bgcolor: 'background.default',
+                  borderRadius: 1,
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                  maxHeight: '100px',
+                  overflow: 'auto'
+                }}>
+                  {data.debug.simulations.examples.slice(0, 3).map((sim: SimulationExample, i: number) => (
+                    <div key={i}>
+                      #{sim.simulation}: {sim.sequence.join(' → ')}
+                    </div>
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* Prediction Components */}
+            {data.debug.prediction && (
+              <Box sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Confidence Components</Typography>
+                <Box sx={{ 
+                  p: 1, 
+                  bgcolor: 'background.default',
+                  borderRadius: 1,
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem'
+                }}>
+                  <div>Probability: {(data.debug.prediction.components.probability * 100).toFixed(1)}%</div>
+                  <div>Entropy: {(data.debug.prediction.components.entropy * 100).toFixed(1)}%</div>
+                  <div>Pattern: {(data.debug.prediction.components.pattern * 100).toFixed(1)}%</div>
+                </Box>
+              </Box>
+            )}
           </Box>
         )}
 

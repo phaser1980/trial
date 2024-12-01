@@ -14,3 +14,136 @@
 {"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-01T07:07:45.680Z"}
 {"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-01T07:07:45.686Z"}
 {"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-01T07:07:45.691Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:11:19.149Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:11:19.182Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:11:19.182Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:11:19.195Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:11:19.195Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-01T07:11:19.196Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-01T07:11:19.198Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:11:19.230Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-01T07:11:19.231Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:11:26.170Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:11:26.170Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:11:26.175Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:11:26.176Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-01T07:11:26.176Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.178Z"}
+{"level":"info","message":"Analyzing 90 symbols","service":"game-analysis","timestamp":"2024-12-01T07:11:26.180Z"}
+{"level":"info","message":"Running markovChain analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.180Z"}
+{"confidence":0.4838709677419355,"level":"debug","message":"Storing model prediction","modelName":"markovChain","predictedSymbol":"3","sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.180Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"markovChain","predictionId":206,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.182Z"}
+{"level":"info","message":"markovChain analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.182Z"}
+{"level":"info","message":"Running entropy analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.182Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"entropy","predictedSymbol":2,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.183Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"entropy","predictionId":207,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.183Z"}
+{"level":"info","message":"entropy analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.184Z"}
+{"level":"info","message":"Running chiSquare analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.184Z"}
+{"confidence":0.6274969787445795,"level":"debug","message":"Storing model prediction","modelName":"chiSquare","predictedSymbol":3,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.184Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"chiSquare","predictionId":208,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.186Z"}
+{"level":"info","message":"chiSquare analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.186Z"}
+{"level":"info","message":"Running monteCarlo analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.186Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"monteCarlo","sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.188Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"monteCarlo","predictionId":209,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.188Z"}
+{"level":"info","message":"monteCarlo analysis completed in 2ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.188Z"}
+{"level":"info","message":"Running arima analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.188Z"}
+{"confidence":0,"level":"debug","message":"Storing model prediction","modelName":"arima","predictedSymbol":0,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.757Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"arima","predictionId":210,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:26.758Z"}
+{"level":"info","message":"arima analysis completed in 568ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.758Z"}
+{"level":"info","message":"Running lstm analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.759Z"}
+{"level":"info","message":"lstm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.759Z"}
+{"level":"info","message":"Running hmm analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:26.759Z"}
+{"level":"info","message":"hmm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:26.759Z"}
+{"confidence":0.38941880413644614,"level":"debug","message":"Storing model prediction","modelName":"hybrid","predictedSymbol":3,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:27.154Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"hybrid","predictionId":211,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-01T07:11:27.155Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:11:32.407Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:11:32.407Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:11:32.421Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:11:32.421Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-01T07:11:32.422Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.423Z"}
+{"level":"info","message":"Analyzing 180 symbols","service":"game-analysis","timestamp":"2024-12-01T07:11:32.425Z"}
+{"level":"info","message":"Running markovChain analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:32.425Z"}
+{"confidence":0.325,"level":"debug","message":"Storing model prediction","modelName":"markovChain","predictedSymbol":"1","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.426Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"markovChain","predictionId":212,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.426Z"}
+{"level":"info","message":"markovChain analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:32.426Z"}
+{"level":"info","message":"Running entropy analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:32.426Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"entropy","predictedSymbol":1,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.427Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"entropy","predictionId":213,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.427Z"}
+{"level":"info","message":"entropy analysis completed in 1ms","service":"game-analysis","timestamp":"2024-12-01T07:11:32.427Z"}
+{"level":"info","message":"Running chiSquare analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:32.427Z"}
+{"confidence":0.6274969787445794,"level":"debug","message":"Storing model prediction","modelName":"chiSquare","predictedSymbol":3,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.427Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"chiSquare","predictionId":214,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.428Z"}
+{"level":"info","message":"chiSquare analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:32.428Z"}
+{"level":"info","message":"Running monteCarlo analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:32.428Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"monteCarlo","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.429Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"monteCarlo","predictionId":215,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:32.429Z"}
+{"level":"info","message":"monteCarlo analysis completed in 1ms","service":"game-analysis","timestamp":"2024-12-01T07:11:32.429Z"}
+{"level":"info","message":"Running arima analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:32.429Z"}
+{"confidence":0,"level":"debug","message":"Storing model prediction","modelName":"arima","predictedSymbol":0,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:33.027Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"arima","predictionId":216,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:33.028Z"}
+{"level":"info","message":"arima analysis completed in 598ms","service":"game-analysis","timestamp":"2024-12-01T07:11:33.028Z"}
+{"level":"info","message":"Running lstm analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:33.028Z"}
+{"confidence":0.7599999999999999,"level":"debug","message":"Storing model prediction","modelName":"lstm","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:33.340Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"lstm","predictionId":217,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:33.341Z"}
+{"level":"info","message":"lstm analysis completed in 312ms","service":"game-analysis","timestamp":"2024-12-01T07:11:33.342Z"}
+{"level":"info","message":"Running hmm analysis...","service":"game-analysis","timestamp":"2024-12-01T07:11:33.342Z"}
+{"level":"info","message":"hmm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:11:33.342Z"}
+{"confidence":0.45649779850686917,"level":"debug","message":"Storing model prediction","modelName":"hybrid","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:33.994Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"hybrid","predictionId":218,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:11:33.994Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:15:50.824Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:15:50.969Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:15:50.970Z"}
+{"level":"info","message":"Analyzing 180 symbols","service":"game-analysis","timestamp":"2024-12-01T07:15:50.974Z"}
+{"level":"info","message":"Running markovChain analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:50.975Z"}
+{"confidence":0.325,"level":"debug","message":"Storing model prediction","modelName":"markovChain","predictedSymbol":"1","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.975Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"markovChain","predictionId":219,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.977Z"}
+{"level":"info","message":"markovChain analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:15:50.978Z"}
+{"level":"info","message":"Running entropy analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:50.978Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"entropy","predictedSymbol":1,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.978Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"entropy","predictionId":220,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.979Z"}
+{"level":"info","message":"entropy analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:15:50.979Z"}
+{"level":"info","message":"Running chiSquare analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:50.979Z"}
+{"confidence":0.6274969787445794,"level":"debug","message":"Storing model prediction","modelName":"chiSquare","predictedSymbol":3,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.979Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"chiSquare","predictionId":221,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.980Z"}
+{"level":"info","message":"chiSquare analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:15:50.980Z"}
+{"level":"info","message":"Running monteCarlo analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:50.980Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"monteCarlo","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.981Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"monteCarlo","predictionId":222,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:50.982Z"}
+{"level":"info","message":"monteCarlo analysis completed in 1ms","service":"game-analysis","timestamp":"2024-12-01T07:15:50.982Z"}
+{"level":"info","message":"Running arima analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:50.982Z"}
+{"confidence":0,"level":"debug","message":"Storing model prediction","modelName":"arima","predictedSymbol":0,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:51.638Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"arima","predictionId":223,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:51.639Z"}
+{"level":"info","message":"arima analysis completed in 656ms","service":"game-analysis","timestamp":"2024-12-01T07:15:51.639Z"}
+{"level":"info","message":"Running lstm analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:51.639Z"}
+{"confidence":0.7599999999999999,"level":"debug","message":"Storing model prediction","modelName":"lstm","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:51.641Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"lstm","predictionId":224,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:51.642Z"}
+{"level":"info","message":"lstm analysis completed in 2ms","service":"game-analysis","timestamp":"2024-12-01T07:15:51.642Z"}
+{"level":"info","message":"Running hmm analysis...","service":"game-analysis","timestamp":"2024-12-01T07:15:51.642Z"}
+{"level":"info","message":"hmm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-01T07:15:51.642Z"}
+{"confidence":0.45649779850686917,"level":"debug","message":"Storing model prediction","modelName":"hybrid","sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:52.241Z"}
+{"level":"info","message":"Model prediction stored successfully","modelName":"hybrid","predictionId":225,"sequenceId":180,"service":"game-analysis","timestamp":"2024-12-01T07:15:52.242Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:27:33.444Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:27:33.478Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:27:33.478Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:27:33.487Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:27:33.488Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-01T07:27:33.488Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-01T07:27:33.490Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:27:33.522Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-01T07:27:33.524Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:48:13.903Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:48:14.116Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-01T07:48:14.117Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:48:14.118Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:48:14.118Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-01T07:48:14.120Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-01T07:48:14.126Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-01T07:48:14.132Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-01T07:49:07.137Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:49:07.141Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:49:07.186Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:49:07.187Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:49:07.187Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-01T07:49:07.188Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-01T07:49:07.193Z"}

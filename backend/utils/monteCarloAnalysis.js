@@ -1,4 +1,5 @@
 const AnalysisTool = require('./AnalysisTool');
+const logger = require('./logger');
 
 class MonteCarloAnalysis extends AnalysisTool {
     constructor() {
@@ -10,6 +11,7 @@ class MonteCarloAnalysis extends AnalysisTool {
         this.numSymbols = 4; // Number of possible symbols (0-3)
         this.confidenceThreshold = 0.25; // Minimum confidence threshold
         this.patternLength = 3; // Length of patterns to analyze
+        this.symbolMap = ['♠', '♥', '♦', '♣']; // Map numeric indices to symbols
     }
 
     // Calculate transition probabilities from historical data
@@ -49,35 +51,46 @@ class MonteCarloAnalysis extends AnalysisTool {
         }
 
         // Convert to probabilities with adaptive smoothing
+        const normalizedMatrix = {};
         for (const from in matrix) {
+            normalizedMatrix[from] = {};
             const totalCount = counts[from];
             const smoothingFactor = Math.max(0.1, Math.min(1, totalCount / 100));
             
             for (const to in matrix[from]) {
                 if (totalCount === 0) {
-                    matrix[from][to] = 1 / this.numSymbols;
+                    normalizedMatrix[from][to] = 1 / this.numSymbols;
                 } else {
                     // Apply adaptive smoothing
                     const rawProb = matrix[from][to] / totalCount;
-                    matrix[from][to] = (rawProb * smoothingFactor) + ((1 / this.numSymbols) * (1 - smoothingFactor));
+                    normalizedMatrix[from][to] = (rawProb * smoothingFactor) + ((1 / this.numSymbols) * (1 - smoothingFactor));
                 }
             }
         }
 
-        return matrix;
+        // Log transition matrix for debugging
+        this.debugLog.push({
+            type: 'transition_matrix',
+            raw: matrix,
+            normalized: normalizedMatrix,
+            counts
+        });
+
+        return normalizedMatrix;
     }
 
     // Run a single simulation
     runSimulation(transitionMatrix, startSymbol, length) {
         let sequence = [startSymbol];
+        let debug = { steps: [] };
         
         for (let i = 0; i < length - 1; i++) {
             const current = sequence[sequence.length - 1];
             const probabilities = transitionMatrix[current];
             
             if (!probabilities) {
-                console.error('[Monte Carlo] No probabilities for symbol:', current);
-                return null;
+                logger.error('[Monte Carlo] No probabilities for symbol:', current);
+                return { sequence: null, debug };
             }
             
             // Generate next symbol based on probabilities
@@ -87,9 +100,8 @@ class MonteCarloAnalysis extends AnalysisTool {
             
             for (let j = 0; j < this.numSymbols; j++) {
                 cumProb += probabilities[j];
-                if (rand < cumProb) {
+                if (rand < cumProb && nextSymbol === null) {
                     nextSymbol = j;
-                    break;
                 }
             }
             
@@ -98,23 +110,26 @@ class MonteCarloAnalysis extends AnalysisTool {
             }
             
             sequence.push(nextSymbol);
+            debug.steps.push({
+                current: this.symbolMap[current],
+                next: this.symbolMap[nextSymbol],
+                probabilities: Object.fromEntries(
+                    Object.entries(probabilities).map(([k, v]) => [this.symbolMap[k], v])
+                ),
+                random: rand
+            });
         }
         
-        return sequence;
+        return { sequence, debug };
     }
 
     // Calculate entropy of a sequence
-    calculateEntropy(sequence) {
-        const frequencies = {};
-        sequence.forEach(symbol => {
-            frequencies[symbol] = (frequencies[symbol] || 0) + 1;
-        });
-
+    calculateEntropy(probabilities) {
         let entropy = 0;
-        const n = sequence.length;
-        for (const symbol in frequencies) {
-            const p = frequencies[symbol] / n;
-            entropy -= p * Math.log2(p);
+        for (const p of probabilities) {
+            if (p > 0) {
+                entropy -= p * Math.log2(p);
+            }
         }
         return entropy;
     }
@@ -125,19 +140,38 @@ class MonteCarloAnalysis extends AnalysisTool {
         const patterns = new Map();
 
         for (let i = 0; i <= symbols.length - patternLength; i++) {
-            const pattern = symbols.slice(i, i + patternLength).join(',');
-            if (!patterns.has(pattern)) {
-                patterns.set(pattern, { count: 0, positions: [] });
+            const pattern = symbols.slice(i, i + patternLength);
+            const patternKey = pattern.join(',');
+            const displayPattern = pattern.map(s => this.symbolMap[s]).join('');
+            
+            if (!patterns.has(patternKey)) {
+                patterns.set(patternKey, { 
+                    pattern: displayPattern,
+                    count: 0, 
+                    positions: [] 
+                });
             }
-            patterns.get(pattern).count++;
-            patterns.get(pattern).positions.push(i);
+            patterns.get(patternKey).count++;
+            patterns.get(patternKey).positions.push(i);
         }
 
         // Find patterns that appear more frequently than random chance
         const expectedFrequency = symbols.length / Math.pow(this.numSymbols, patternLength);
         const significantPatterns = Array.from(patterns.entries())
             .filter(([_, data]) => data.count > expectedFrequency * 1.5)
-            .sort((a, b) => b[1].count - a[1].count);
+            .sort((a, b) => b[1].count - a[1].count)
+            .map(([key, data]) => ({
+                pattern: data.pattern,
+                count: data.count,
+                positions: data.positions,
+                frequency: data.count / symbols.length
+            }));
+
+        this.debugLog.push({
+            type: 'patterns',
+            significant: significantPatterns,
+            expectedFrequency
+        });
 
         return significantPatterns;
     }
@@ -145,6 +179,7 @@ class MonteCarloAnalysis extends AnalysisTool {
     async analyze(symbols) {
         try {
             this.debugLog = [];
+            logger.debug('[Monte Carlo] Starting analysis', { symbolCount: symbols.length });
             
             if (symbols.length < this.minSamples) {
                 return {
@@ -158,26 +193,49 @@ class MonteCarloAnalysis extends AnalysisTool {
             // Calculate transition matrix with pattern analysis
             const transitionMatrix = this.calculateTransitionMatrix(symbols);
             const recentPattern = symbols.slice(-this.patternLength);
+            const significantPatterns = this.analyzeSeedPatterns(symbols);
             
             // Run simulations
             const predictions = new Array(this.numSymbols).fill(0);
             let validSimulations = 0;
             let maxPatternMatch = 0;
+            const simulationDebug = [];
 
             for (let i = 0; i < this.simulationCount; i++) {
-                const simulation = this.runSimulation(transitionMatrix, recentPattern[recentPattern.length - 1], 2);
-                if (simulation && simulation.length === 2) {
-                    predictions[simulation[1]]++;
+                const { sequence, debug } = this.runSimulation(
+                    transitionMatrix, 
+                    recentPattern[recentPattern.length - 1], 
+                    2
+                );
+
+                if (sequence && sequence.length === 2) {
+                    predictions[sequence[1]]++;
                     validSimulations++;
                     
                     // Check if this matches a known pattern
-                    const simPattern = [...recentPattern.slice(1), simulation[1]].join(',');
+                    const simPattern = [...recentPattern.slice(1), sequence[1]].join(',');
                     const patternCount = this.seedCandidates.get(simPattern) || 0;
                     maxPatternMatch = Math.max(maxPatternMatch, patternCount);
+
+                    if (i < 10) { // Store first 10 simulations for debugging
+                        simulationDebug.push({
+                            simulation: i + 1,
+                            sequence: sequence.map(s => this.symbolMap[s]),
+                            ...debug
+                        });
+                    }
                 }
             }
 
+            this.debugLog.push({
+                type: 'simulations',
+                total: this.simulationCount,
+                valid: validSimulations,
+                examples: simulationDebug
+            });
+
             if (validSimulations === 0) {
+                logger.warn('[Monte Carlo] No valid simulations');
                 return {
                     prediction: null,
                     confidence: 0,
@@ -193,7 +251,7 @@ class MonteCarloAnalysis extends AnalysisTool {
 
             // Handle NaN values
             if (isNaN(maxProb) || isNaN(prediction)) {
-                console.error('[Monte Carlo] NaN values detected in prediction');
+                logger.error('[Monte Carlo] NaN values detected in prediction');
                 return {
                     prediction: null,
                     confidence: 0,
@@ -203,10 +261,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             }
 
             // Calculate entropy-based confidence
-            const entropy = -probabilities.reduce((sum, p) => {
-                if (p <= 0) return sum;
-                return sum + (p * Math.log2(p));
-            }, 0);
+            const entropy = this.calculateEntropy(probabilities);
             const normalizedEntropy = entropy / Math.log2(this.numSymbols);
             const entropyConfidence = 1 - normalizedEntropy;
 
@@ -218,15 +273,49 @@ class MonteCarloAnalysis extends AnalysisTool {
                 (maxProb * 0.4) + (entropyConfidence * 0.4) + (patternConfidence * 0.2)
             ));
 
+            // Add final prediction details to debug log
+            this.debugLog.push({
+                type: 'prediction',
+                probabilities: Object.fromEntries(
+                    probabilities.map((p, i) => [this.symbolMap[i], p])
+                ),
+                entropy: {
+                    raw: entropy,
+                    normalized: normalizedEntropy,
+                    confidence: entropyConfidence
+                },
+                pattern: {
+                    maxMatch: maxPatternMatch,
+                    confidence: patternConfidence
+                },
+                final: {
+                    prediction: this.symbolMap[prediction],
+                    confidence,
+                    components: {
+                        probability: maxProb,
+                        entropy: entropyConfidence,
+                        pattern: patternConfidence
+                    }
+                }
+            });
+
+            logger.info('[Monte Carlo] Analysis complete', {
+                prediction: this.symbolMap[prediction],
+                confidence,
+                validSimulations
+            });
+
             return {
                 prediction,
                 confidence,
-                probabilities,
+                probabilities: Object.fromEntries(
+                    probabilities.map((p, i) => [this.symbolMap[i], p])
+                ),
                 debug: this.debugLog
             };
 
         } catch (error) {
-            console.error('Monte Carlo Analysis Error:', error);
+            logger.error('[Monte Carlo] Analysis Error:', error);
             return {
                 prediction: null,
                 confidence: 0,
