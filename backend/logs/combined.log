@@ -147,3 +147,10 @@
 {"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:49:07.187Z"}
 {"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-01T07:49:07.188Z"}
 {"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-01T07:49:07.193Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-01T07:51:55.434Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-01T07:51:55.436Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:51:55.475Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T07:51:55.476Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-01T07:51:55.478Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-01T07:51:55.580Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-01T07:51:55.582Z"}
