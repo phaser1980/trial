@@ -238,6 +238,7 @@ const GameAnalysisPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);
 
+  // Frontend symbol mapping (0=Spades, 1=Hearts, 2=Diamonds, 3=Clubs)
   const symbols = ['♠', '♥', '♦', '♣'];
 
   useEffect(() => {

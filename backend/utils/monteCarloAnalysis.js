@@ -7,7 +7,7 @@ class MonteCarloAnalysis extends AnalysisTool {
         this.simulationCount = 1000;
         this.debugLog = [];
         this.seedCandidates = new Map(); // Track potential seed values
-        this.symbolMap = ['♠', '♣', '♥', '♦'];
+        this.numSymbols = 4; // Number of possible symbols (0-3)
         this.confidenceThreshold = 0.25; // Minimum confidence threshold
         this.patternLength = 3; // Length of patterns to analyze
     }
@@ -18,10 +18,10 @@ class MonteCarloAnalysis extends AnalysisTool {
         const counts = {};
         
         // Initialize matrices using numeric indices
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < this.numSymbols; i++) {
             matrix[i] = {};
             counts[i] = 0;
-            for (let j = 0; j < 4; j++) {
+            for (let j = 0; j < this.numSymbols; j++) {
                 matrix[i][j] = 0;
             }
         }
@@ -32,7 +32,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             const current = pattern[pattern.length - 2];
             const next = pattern[pattern.length - 1];
             
-            if (current < 0 || current > 3 || next < 0 || next > 3) {
+            if (current < 0 || current > this.numSymbols - 1 || next < 0 || next > this.numSymbols - 1) {
                 continue;
             }
             
@@ -55,13 +55,13 @@ class MonteCarloAnalysis extends AnalysisTool {
             
             if (totalCount === 0) {
                 for (const to in matrix[from]) {
-                    matrix[from][to] = 0.25;
+                    matrix[from][to] = 1 / this.numSymbols;
                 }
             } else {
                 for (const to in matrix[from]) {
                     // Apply adaptive smoothing
                     const rawProb = matrix[from][to] / totalCount;
-                    matrix[from][to] = (rawProb * smoothingFactor) + (0.25 * (1 - smoothingFactor));
+                    matrix[from][to] = (rawProb * smoothingFactor) + ((1 / this.numSymbols) * (1 - smoothingFactor));
                 }
             }
         }
@@ -94,7 +94,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             let cumProb = 0;
             let nextSymbol = null;
             
-            for (let j = 0; j < 4; j++) {
+            for (let j = 0; j < this.numSymbols; j++) {
                 cumProb += probabilities[j];
                 if (rand < cumProb) {
                     nextSymbol = j;
@@ -144,7 +144,7 @@ class MonteCarloAnalysis extends AnalysisTool {
         }
 
         // Find patterns that appear more frequently than random chance
-        const expectedFrequency = symbols.length / Math.pow(4, patternLength);
+        const expectedFrequency = symbols.length / Math.pow(this.numSymbols, patternLength);
         const significantPatterns = Array.from(patterns.entries())
             .filter(([_, data]) => data.count > expectedFrequency * 1.5)
             .sort((a, b) => b[1].count - a[1].count);
@@ -170,7 +170,7 @@ class MonteCarloAnalysis extends AnalysisTool {
             const recentPattern = symbols.slice(-this.patternLength);
             
             // Run simulations with pattern matching
-            const predictions = new Array(4).fill(0);
+            const predictions = new Array(this.numSymbols).fill(0);
             let validSimulations = 0;
             let maxPatternMatch = 0;
 

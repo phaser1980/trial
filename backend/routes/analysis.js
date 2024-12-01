@@ -653,65 +653,121 @@ class EntropyAnalysis extends AnalysisTool {
   constructor() {
     super('Entropy Analysis');
     this.windowSize = 30;
+    this.patternSize = 3;
     this.entropyThreshold = 1.5;
+    this.debugLog = [];
   }
 
   calculateEntropy(data) {
-    const frequencies = {};
-    data.forEach(symbol => {
-      frequencies[symbol] = (frequencies[symbol] || 0) + 1;
+    const frequencies = new Map();
+    const patterns = new Map();
+    let totalPatterns = 0;
+
+    // Calculate pattern frequencies with sliding window
+    for (let i = 0; i <= data.length - this.patternSize; i++) {
+      const pattern = data.slice(i, i + this.patternSize).join(',');
+      patterns.set(pattern, (patterns.get(pattern) || 0) + 1);
+      totalPatterns++;
+
+      // Track individual symbol frequencies
+      const symbol = data[i];
+      frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
+    }
+
+    // Calculate pattern entropy
+    let patternEntropy = 0;
+    patterns.forEach(count => {
+      const probability = count / totalPatterns;
+      patternEntropy -= probability * Math.log2(probability);
     });
 
-    return -Object.values(frequencies).reduce((sum, count) => {
-      const p = count / data.length;
-      return sum + p * Math.log2(p);
-    }, 0);
+    // Calculate symbol entropy
+    let symbolEntropy = 0;
+    frequencies.forEach(count => {
+      const probability = count / data.length;
+      symbolEntropy -= probability * Math.log2(probability);
+    });
+
+    return {
+      patternEntropy,
+      symbolEntropy,
+      patterns,
+      frequencies,
+      totalPatterns
+    };
   }
 
   analyze(symbols) {
+    this.debugLog = [];
+
     if (symbols.length < this.windowSize) {
-      return { entropy: 0, prediction: undefined, confidence: 0.25 };
+      return {
+        prediction: null,
+        confidence: 0,
+        entropy: 0,
+        debug: this.debugLog
+      };
     }
 
     const recentWindow = symbols.slice(-this.windowSize);
-    const entropy = this.calculateEntropy(recentWindow);
+    const entropyResults = this.calculateEntropy(recentWindow);
     
-    // Calculate frequencies and prediction
-    const frequencies = {};
-    recentWindow.forEach(symbol => {
-      frequencies[symbol] = (frequencies[symbol] || 0) + 1;
-    });
+    // Normalize entropies
+    const maxPatternEntropy = Math.log2(Math.pow(4, this.patternSize));
+    const maxSymbolEntropy = Math.log2(4);
 
-    let maxCount = 0;
-    let prediction;
-    Object.entries(frequencies).forEach(([symbol, count]) => {
-      if (count > maxCount) {
-        maxCount = count;
-        prediction = parseInt(symbol);
+    const normalizedPatternEntropy = entropyResults.patternEntropy / maxPatternEntropy;
+    const normalizedSymbolEntropy = entropyResults.symbolEntropy / maxSymbolEntropy;
+
+    // Find most likely next symbol based on pattern matching
+    let prediction = null;
+    let maxPatternCount = 0;
+    const lastPattern = recentWindow.slice(-this.patternSize + 1).join(',');
+
+    entropyResults.patterns.forEach((count, pattern) => {
+      if (pattern.startsWith(lastPattern) && count > maxPatternCount) {
+        maxPatternCount = count;
+        prediction = Number(pattern.split(',').pop());
       }
     });
 
-    // Calculate base confidence from frequency
-    let baseConfidence = maxCount / this.windowSize;
-    
-    // Adjust confidence based on entropy
-    // Lower entropy = higher confidence
-    const maxEntropy = Math.log2(Object.keys(frequencies).length); // Maximum possible entropy
-    const entropyFactor = Math.max(0, 1 - (entropy / maxEntropy));
-    
-    // Combine frequency and entropy factors
-    let confidence = 0.4 * baseConfidence + 0.6 * entropyFactor;
-    
-    // Adjust for minimum confidence threshold
-    confidence = Math.max(0.25, Math.min(0.95, confidence));
-    
-    // If entropy is very high (close to max), reduce confidence
-    if (entropy > 0.9 * maxEntropy) {
-      confidence = Math.min(confidence, 0.4);
+    // If no pattern match, use frequency-based prediction
+    if (prediction === null) {
+      let maxFreq = 0;
+      entropyResults.frequencies.forEach((freq, symbol) => {
+        if (freq > maxFreq) {
+          maxFreq = freq;
+          prediction = Number(symbol);
+        }
+      });
     }
 
-    this.lastPrediction = prediction;
-    return { entropy, prediction, confidence };
+    // Calculate confidence based on multiple factors
+    const entropyDifference = Math.abs(normalizedPatternEntropy - normalizedSymbolEntropy);
+    const patternStrength = 1 - normalizedPatternEntropy;
+    const frequencyConfidence = maxPatternCount / entropyResults.totalPatterns;
+
+    let confidence = Math.min(0.95, Math.max(0.25,
+      0.4 * frequencyConfidence +
+      0.3 * (1 - normalizedPatternEntropy) +
+      0.3 * (1 - normalizedSymbolEntropy)
+    ));
+
+    // Add debug information
+    this.debugLog.push(
+      `Pattern Entropy: ${normalizedPatternEntropy.toFixed(3)}`,
+      `Symbol Entropy: ${normalizedSymbolEntropy.toFixed(3)}`,
+      `Pattern Strength: ${patternStrength.toFixed(3)}`,
+      `Frequency Confidence: ${frequencyConfidence.toFixed(3)}`,
+      `Final Confidence: ${confidence.toFixed(3)}`
+    );
+
+    return {
+      prediction,
+      confidence,
+      entropy: normalizedPatternEntropy,
+      debug: this.debugLog
+    };
   }
 }
 

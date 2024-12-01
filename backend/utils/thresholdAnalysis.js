@@ -284,88 +284,43 @@ class ThresholdAnalysis extends AnalysisTool {
     constructor() {
         super('Threshold Analysis');
         this.thresholds = {
-            '♠': 0.25,
-            '♣': 0.5,
-            '♥': 0.75,
-            '♦': 1.0
+            0: 0.25,  // Spades
+            1: 0.5,   // Hearts
+            2: 0.75,  // Diamonds
+            3: 1.0    // Clubs
         };
         this.windowSize = 10;
     }
 
     // Calculate running average
     calculateRunningAverage(values) {
-        if (values.length === 0) return 0;
-        return values.reduce((sum, val) => sum + val, 0) / values.length;
+        return values.reduce((a, b) => a + b, 0) / values.length;
     }
 
-    // Convert symbol to numerical value
-    symbolToValue(symbol) {
-        return this.thresholds[symbol] || 0;
-    }
-
-    // Convert numerical value to symbol
-    valueToSymbol(value) {
-        let result = '♠';
-        for (const [symbol, threshold] of Object.entries(this.thresholds)) {
-            if (value <= threshold) {
-                result = symbol;
-                break;
-            }
+    analyze(symbols) {
+        if (symbols.length < this.windowSize) {
+            return { prediction: null, confidence: 0 };
         }
-        return result;
-    }
 
-    async analyze(symbols) {
-        try {
-            if (!symbols || symbols.length < this.windowSize) {
-                return {
-                    prediction: null,
-                    confidence: 0,
-                    message: 'Insufficient data'
-                };
+        const recentValues = symbols.slice(-this.windowSize);
+        const avg = this.calculateRunningAverage(recentValues);
+        
+        // Find the closest threshold
+        let minDiff = Infinity;
+        let prediction = null;
+        
+        Object.entries(this.thresholds).forEach(([symbol, threshold]) => {
+            const diff = Math.abs(avg - threshold);
+            if (diff < minDiff) {
+                minDiff = diff;
+                prediction = parseInt(symbol);
             }
+        });
 
-            // Convert recent symbols to values
-            const values = symbols.slice(-this.windowSize).map(s => this.symbolToValue(s));
-            const average = this.calculateRunningAverage(values);
+        // Calculate confidence based on how close we are to the threshold
+        const confidence = Math.max(0.25, Math.min(0.95, 1 - (minDiff * 2)));
 
-            // Calculate trend
-            const trend = values[values.length - 1] - values[values.length - 2];
-            
-            // Predict next value
-            let predictedValue = average + (trend * 0.5);
-            predictedValue = Math.max(0, Math.min(1, predictedValue));
-
-            // Convert to symbol
-            const prediction = this.valueToSymbol(predictedValue);
-
-            // Calculate confidence based on consistency
-            const variance = values.reduce((sum, val) => 
-                sum + Math.pow(val - average, 2), 0) / values.length;
-            const confidence = Math.max(0.1, Math.min(0.9, 1 - Math.sqrt(variance)));
-
-            // Update prediction history
-            this.addPrediction(prediction);
-
-            return {
-                prediction,
-                confidence,
-                debug: {
-                    average,
-                    trend,
-                    variance,
-                    windowSize: this.windowSize
-                }
-            };
-
-        } catch (error) {
-            console.error('[Threshold] Analysis error:', error);
-            return {
-                prediction: null,
-                confidence: 0,
-                error: error.message
-            };
-        }
+        return { prediction, confidence };
     }
 }
 
