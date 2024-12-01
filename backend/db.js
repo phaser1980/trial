@@ -160,13 +160,14 @@ const dbUtils = {
   },
 
   // Function to update prediction correctness
-  async updatePredictionCorrectness(client, predictionId, wasCorrect) {
+  async updatePredictionCorrectness(client, actualSymbol) {
     const query = `
       UPDATE model_predictions 
-      SET was_correct = $1
-      WHERE id = $2;
+      SET was_correct = (predicted_symbol = $1)
+      WHERE created_at >= NOW() - INTERVAL '1 minute'
+      AND was_correct IS NULL;
     `;
-    await client.query(query, [wasCorrect, predictionId]);
+    await client.query(query, [actualSymbol]);
   },
 
   // Function to store model performance metrics
@@ -179,9 +180,9 @@ const dbUtils = {
     `;
     const values = [
       modelName,
-      metrics.accuracy,
-      metrics.confidenceCalibration,
-      metrics.sampleSize,
+      metrics.accuracy || 0,
+      metrics.confidenceCalibration || 0,
+      metrics.sampleSize || 0,
       metrics.needsRetraining || false
     ];
     const result = await client.query(query, values);
@@ -190,31 +191,54 @@ const dbUtils = {
 
   // Function to get recent model performance
   async getModelPerformance(client, modelName, limit = 100) {
-    const query = `
+    const query = modelName ? `
       SELECT *
       FROM model_performance
       WHERE model_name = $1
       ORDER BY created_at DESC
       LIMIT $2;
+    ` : `
+      SELECT *
+      FROM model_performance
+      ORDER BY created_at DESC
+      LIMIT $1;
     `;
-    const result = await client.query(query, [modelName, limit]);
+    
+    const values = modelName ? [modelName, limit] : [limit];
+    const result = await client.query(query, values);
     return result.rows;
   },
 
   // Function to get model predictions accuracy
   async getModelAccuracy(client, modelName, timeWindow = '24 hours') {
-    const query = `
+    const query = modelName ? `
       SELECT 
+        model_name,
         COUNT(*) as total_predictions,
         COUNT(*) FILTER (WHERE was_correct = true) as correct_predictions,
-        AVG(CASE WHEN was_correct = true THEN 1 ELSE 0 END) as accuracy,
-        AVG(confidence) as avg_confidence
+        AVG(CASE WHEN was_correct = true THEN 1 ELSE 0 END)::float as accuracy,
+        AVG(confidence)::float as avg_confidence,
+        AVG(ABS(CASE WHEN was_correct THEN 1 ELSE 0 END - confidence))::float as calibration_error
       FROM model_predictions
       WHERE model_name = $1
-      AND created_at >= NOW() - INTERVAL $2;
+      AND created_at >= NOW() - INTERVAL $2
+      GROUP BY model_name;
+    ` : `
+      SELECT 
+        model_name,
+        COUNT(*) as total_predictions,
+        COUNT(*) FILTER (WHERE was_correct = true) as correct_predictions,
+        AVG(CASE WHEN was_correct = true THEN 1 ELSE 0 END)::float as accuracy,
+        AVG(confidence)::float as avg_confidence,
+        AVG(ABS(CASE WHEN was_correct THEN 1 ELSE 0 END - confidence))::float as calibration_error
+      FROM model_predictions
+      WHERE created_at >= NOW() - INTERVAL $1
+      GROUP BY model_name;
     `;
-    const result = await client.query(query, [modelName, timeWindow]);
-    return result.rows[0];
+    
+    const values = modelName ? [modelName, timeWindow] : [timeWindow];
+    const result = await client.query(query, values);
+    return modelName ? result.rows[0] : result.rows;
   },
 
   // Function to refresh materialized view
