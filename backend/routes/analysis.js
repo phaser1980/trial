@@ -1268,10 +1268,15 @@ Object.values(analysisTools).forEach(tool => {
 });
 
 router.get('/', async (req, res) => {
+  let client;
   try {
+    client = await pool.connect();
+    
     // Fetch symbols from the database
-    const result = await pool.query('SELECT symbol FROM sequences ORDER BY created_at ASC');
+    const result = await client.query('SELECT id, symbol, created_at FROM sequences ORDER BY created_at ASC');
     const symbols = result.rows.map(row => row.symbol);
+    const latestSequenceId = result.rows[result.rows.length - 1]?.id;
+    
     console.log(`Analyzing ${symbols.length} symbols`);
 
     if (symbols.length < 2) {
@@ -1285,6 +1290,7 @@ router.get('/', async (req, res) => {
     // Get individual model predictions
     const analyses = {};
     const debugInfo = {};
+    const predictionPromises = [];
 
     for (const [name, tool] of Object.entries(analysisTools)) {
       try {
@@ -1293,6 +1299,19 @@ router.get('/', async (req, res) => {
         
         const result = await tool.analyze(symbols);
         const endTime = Date.now();
+
+        // Store prediction if we have valid data
+        if (latestSequenceId && result.prediction !== null) {
+          predictionPromises.push(
+            client.query(
+              `INSERT INTO model_predictions 
+               (sequence_id, model_name, predicted_symbol, confidence, created_at)
+               VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+               RETURNING id`,
+              [latestSequenceId, name, result.prediction, result.confidence]
+            )
+          );
+        }
         
         analyses[name] = result;
         debugInfo[name] = {
@@ -1305,16 +1324,6 @@ router.get('/', async (req, res) => {
         
         console.log(`${name} analysis completed in ${endTime - startTime}ms`);
         
-        // Update accuracy tracking
-        if (tool.lastPrediction !== null) {
-          tool.updateAccuracy(tool.lastPrediction, symbols[symbols.length - 1]);
-          predictionTracker.recordPrediction(
-            name,
-            tool.lastPrediction,
-            analyses[name].confidence,
-            symbols[symbols.length - 1]
-          );
-        }
       } catch (error) {
         console.error(`Error in ${name} analysis:`, error);
         analyses[name] = {
@@ -1330,8 +1339,21 @@ router.get('/', async (req, res) => {
       }
     }
 
+    // Wait for all predictions to be stored
+    await Promise.all(predictionPromises);
+
     // Get hybrid model prediction
     const hybridPrediction = await hybridModel.getPrediction(symbols);
+
+    // Store hybrid model prediction if valid
+    if (latestSequenceId && hybridPrediction.prediction !== null) {
+      await client.query(
+        `INSERT INTO model_predictions 
+         (sequence_id, model_name, predicted_symbol, confidence, created_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+        [latestSequenceId, 'hybrid', hybridPrediction.prediction, hybridPrediction.confidence]
+      );
+    }
 
     // Send back results with debug info
     const response = {
@@ -1388,22 +1410,142 @@ router.get('/', async (req, res) => {
       details: error.message,
       stack: error.stack
     });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
-// Update models with actual result
+// Update models with actual result and store performance metrics
 router.post('/feedback', async (req, res) => {
+  let client;
   try {
     const { actual } = req.body;
-    if (actual !== undefined) {
-      hybridModel.updateModels(actual);
-      res.json({ success: true });
-    } else {
-      res.status(400).json({ error: 'Missing actual value' });
+    if (actual === undefined) {
+      return res.status(400).json({ error: 'Missing actual value' });
     }
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    // Update was_correct for recent predictions
+    await client.query(
+      `UPDATE model_predictions 
+       SET was_correct = (predicted_symbol = $1)
+       WHERE created_at >= NOW() - INTERVAL '1 minute'
+       AND was_correct IS NULL`,
+      [actual]
+    );
+
+    // Calculate and store performance metrics for each model
+    for (const modelName of [...Object.keys(analysisTools), 'hybrid']) {
+      // Get recent prediction accuracy
+      const accuracyResult = await client.query(
+        `SELECT 
+          COUNT(CASE WHEN was_correct THEN 1 END)::float / COUNT(*) as accuracy,
+          COUNT(*) as sample_size
+         FROM model_predictions
+         WHERE model_name = $1
+         AND created_at >= NOW() - INTERVAL '1 hour'`,
+        [modelName]
+      );
+
+      // Calculate confidence calibration
+      const calibrationResult = await client.query(
+        `SELECT 
+          AVG(ABS(CASE WHEN was_correct THEN 1 ELSE 0 END - confidence)) as calibration_error
+         FROM model_predictions
+         WHERE model_name = $1
+         AND created_at >= NOW() - INTERVAL '1 hour'`,
+        [modelName]
+      );
+
+      const accuracy = accuracyResult.rows[0]?.accuracy || 0;
+      const sampleSize = accuracyResult.rows[0]?.sample_size || 0;
+      const calibration = 1 - (calibrationResult.rows[0]?.calibration_error || 0);
+
+      // Store performance metrics
+      await client.query(
+        `INSERT INTO model_performance 
+         (model_name, accuracy, confidence_calibration, sample_size, created_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+        [modelName, accuracy, calibration, sampleSize]
+      );
+    }
+
+    await client.query('COMMIT');
+    
+    // Update models in memory
+    hybridModel.updateModels(actual);
+    
+    res.json({ 
+      success: true,
+      message: 'Feedback processed and metrics updated'
+    });
+
   } catch (error) {
+    if (client) {
+      await client.query('ROLLBACK');
+    }
     console.error('Feedback error:', error);
-    res.status(500).json({ error: 'Failed to process feedback' });
+    res.status(500).json({ 
+      error: 'Failed to process feedback',
+      details: error.message 
+    });
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+});
+
+// Get model performance metrics
+router.get('/performance', async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+    
+    // Get overall performance metrics
+    const overallResult = await client.query(
+      `SELECT 
+         model_name,
+         AVG(accuracy) as avg_accuracy,
+         AVG(confidence_calibration) as avg_calibration,
+         SUM(sample_size) as total_predictions,
+         MAX(created_at) as last_updated
+       FROM model_performance
+       WHERE created_at >= NOW() - INTERVAL '24 hours'
+       GROUP BY model_name`
+    );
+
+    // Get recent prediction accuracy
+    const recentResult = await client.query(
+      `SELECT 
+         model_name,
+         COUNT(CASE WHEN was_correct THEN 1 END)::float / COUNT(*) as recent_accuracy,
+         COUNT(*) as prediction_count
+       FROM model_predictions
+       WHERE created_at >= NOW() - INTERVAL '1 hour'
+       GROUP BY model_name`
+    );
+    
+    res.json({
+      overall_performance: overallResult.rows,
+      recent_performance: recentResult.rows,
+      timestamp: new Date()
+    });
+    
+  } catch (error) {
+    console.error('Error fetching performance metrics:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch performance metrics',
+      details: error.message 
+    });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
