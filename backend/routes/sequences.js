@@ -1,32 +1,44 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
+const db = require('../db');
 const { performThresholdAnalysis } = require('../utils/thresholdAnalysis');
 
-// Drop and recreate tables to fix schema
+// Initialize database schema
 (async () => {
+  const client = await db.getClient();
   try {
-    // Drop existing table
-    await pool.query('DROP TABLE IF EXISTS sequences');
+    console.log('[DB] Initializing sequences table schema');
+    
+    await client.query('BEGIN');
+
+    // Drop existing table if it exists
+    await client.query('DROP TABLE IF EXISTS sequences CASCADE');
     
     // Create table with correct schema
-    await pool.query(`
-      CREATE TABLE sequences (
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sequences (
         id SERIAL PRIMARY KEY,
         symbol INTEGER NOT NULL CHECK (symbol >= 0 AND symbol <= 3),
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('Database schema updated successfully');
-  } catch (err) {
-    console.error('Error updating database schema:', err);
+
+    await client.query('COMMIT');
+    console.log('[DB] Sequences table schema initialized successfully');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('[DB] Error updating database schema:', error);
+  } finally {
+    client.release();
   }
-})();
+})().catch(error => {
+  console.error('[DB] Fatal error during schema initialization:', error);
+});
 
 // Check table structure
 router.get('/debug/schema', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const result = await db.query(`
       SELECT column_name, data_type, column_default
       FROM information_schema.columns
       WHERE table_name = 'sequences'
@@ -43,7 +55,7 @@ router.get('/debug/schema', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     console.log('[DB] Fetching all sequences');
-    const result = await pool.query(
+    const result = await db.query(
       'SELECT symbol, created_at FROM sequences ORDER BY created_at ASC'
     );
     
@@ -77,7 +89,7 @@ router.post('/symbol', async (req, res) => {
       return res.status(400).json({ error: 'Invalid symbol value' });
     }
 
-    const result = await pool.query(
+    const result = await db.query(
       'INSERT INTO sequences (symbol) VALUES ($1) RETURNING *',
       [symbol]
     );
@@ -89,7 +101,7 @@ router.post('/symbol', async (req, res) => {
     });
 
     // Verify data after insertion
-    const verification = await pool.query(
+    const verification = await db.query(
       'SELECT COUNT(*) FROM sequences'
     );
     console.log('[DB] Total sequences after insertion:', verification.rows[0].count);
@@ -107,7 +119,7 @@ router.post('/symbol', async (req, res) => {
 
 // Undo last symbol
 router.delete('/undo', async (req, res) => {
-  const client = await pool.connect();
+  const client = await db.getClient();
   try {
     await client.query('BEGIN');
     
@@ -146,7 +158,7 @@ router.delete('/undo', async (req, res) => {
 
 // Generate test data
 router.post('/generate-test-data', async (req, res) => {
-  const client = await pool.connect();
+  const client = await db.getClient();
   try {
     await client.query('BEGIN');
     
@@ -163,8 +175,7 @@ router.post('/generate-test-data', async (req, res) => {
     `);
     
     await client.query('COMMIT');
-    
-    res.json({ success: true });
+    res.json({ message: 'Test data generated successfully' });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error generating test data:', error);
@@ -176,7 +187,7 @@ router.post('/generate-test-data', async (req, res) => {
 
 // Reset database
 router.post('/reset', async (req, res) => {
-  const client = await pool.connect();
+  const client = await db.getClient();
   try {
     console.log('[DB] Starting database reset');
     
@@ -192,12 +203,7 @@ router.post('/reset', async (req, res) => {
     console.log('[DB] Sequences after reset:', afterCount.rows[0].count);
     
     await client.query('COMMIT');
-    res.json({ 
-      success: true, 
-      message: 'Database reset successfully',
-      before: beforeCount.rows[0].count,
-      after: afterCount.rows[0].count
-    });
+    res.json({ message: 'Database reset successfully' });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('[DB] Error resetting database:', error);

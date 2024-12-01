@@ -71,6 +71,28 @@ class ModelManager {
     this.lastActual = null; // Store last actual symbol for feedback
     this.pool = require('../db').pool;
     this.db = require('../db');
+
+    // Adaptive threshold parameters
+    this.adaptiveThresholds = {
+      accuracy: { min: 0.55, max: 0.75, current: 0.6 },
+      calibration: { min: 0.65, max: 0.85, current: 0.7 },
+      adjustmentRate: 0.01
+    };
+    
+    // RNG pattern tracking
+    this.patternTracking = {
+      periodicity: new Map(),
+      transitions: new Map(),
+      entropyHistory: [],
+      potentialSeeds: new Set()
+    };
+    
+    // Performance monitoring
+    this.performanceHistory = {
+      shortTerm: [], // Last hour
+      mediumTerm: [], // Last day
+      longTerm: []   // Last week
+    };
   }
 
   // Map display name to internal name
@@ -181,8 +203,42 @@ class ModelManager {
     const accuracy = this.calculateAccuracy(modelName);
     const calibration = this.calculateConfidenceCalibration(modelName);
     
-    // Model needs retraining if accuracy is below 0.6 or calibration is below 0.7
-    return accuracy < 0.6 || calibration < 0.7;
+    // Adjust thresholds based on recent performance
+    this.updateAdaptiveThresholds(accuracy, calibration);
+    
+    return accuracy < this.adaptiveThresholds.accuracy.current || 
+           calibration < this.adaptiveThresholds.calibration.current;
+  }
+
+  // Update adaptive thresholds based on performance
+  updateAdaptiveThresholds(accuracy, calibration) {
+    const { adaptiveThresholds: thresholds } = this;
+    
+    // Adjust accuracy threshold
+    if (accuracy > thresholds.accuracy.current + 0.1) {
+      thresholds.accuracy.current = Math.min(
+        thresholds.accuracy.current + thresholds.adjustmentRate,
+        thresholds.accuracy.max
+      );
+    } else if (accuracy < thresholds.accuracy.current - 0.1) {
+      thresholds.accuracy.current = Math.max(
+        thresholds.accuracy.current - thresholds.adjustmentRate,
+        thresholds.accuracy.min
+      );
+    }
+    
+    // Adjust calibration threshold similarly
+    if (calibration > thresholds.calibration.current + 0.1) {
+      thresholds.calibration.current = Math.min(
+        thresholds.calibration.current + thresholds.adjustmentRate,
+        thresholds.calibration.max
+      );
+    } else if (calibration < thresholds.calibration.current - 0.1) {
+      thresholds.calibration.current = Math.max(
+        thresholds.calibration.current - thresholds.adjustmentRate,
+        thresholds.calibration.min
+      );
+    }
   }
 
   // Update weights based on recent performance and confidence
@@ -333,6 +389,202 @@ class ModelManager {
   // Get model performance metrics
   getModelMetrics(modelName) {
     return predictionTracker.getModelMetrics(this.mapModelName(modelName));
+  }
+
+  // Track potential RNG patterns
+  trackPatterns(symbols, prediction) {
+    // Track symbol transitions
+    if (symbols.length >= 2) {
+      const transition = `${symbols[symbols.length - 2]}->${symbols[symbols.length - 1]}`;
+      this.patternTracking.transitions.set(
+        transition,
+        (this.patternTracking.transitions.get(transition) || 0) + 1
+      );
+    }
+    
+    // Track periodicity
+    for (let period = 2; period <= 10; period++) {
+      if (symbols.length >= period * 2) {
+        const matches = this.checkPeriodicity(symbols, period);
+        if (matches > 0.7) {
+          this.patternTracking.periodicity.set(period, matches);
+        }
+      }
+    }
+    
+    // Calculate and track entropy
+    const entropy = this.calculateEntropy(symbols.slice(-20));
+    this.patternTracking.entropyHistory.push({
+      entropy,
+      timestamp: Date.now()
+    });
+    
+    // Trim history
+    if (this.patternTracking.entropyHistory.length > 1000) {
+      this.patternTracking.entropyHistory.shift();
+    }
+    
+    // Identify potential RNG seeds
+    this.identifyPotentialSeeds(symbols);
+  }
+
+  // Check for periodic patterns
+  checkPeriodicity(symbols, period) {
+    let matches = 0;
+    const cycles = Math.floor(symbols.length / period) - 1;
+    
+    for (let i = 0; i < cycles; i++) {
+      const start = symbols.length - (i + 2) * period;
+      const end = symbols.length - (i + 1) * period;
+      const pattern = symbols.slice(start, end);
+      const nextPattern = symbols.slice(end, end + period);
+      
+      if (pattern.every((val, idx) => val === nextPattern[idx])) {
+        matches++;
+      }
+    }
+    
+    return matches / cycles;
+  }
+
+  // Calculate entropy of a sequence
+  calculateEntropy(sequence) {
+    const frequencies = new Map();
+    sequence.forEach(symbol => {
+      frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
+    });
+    
+    return Array.from(frequencies.values()).reduce((entropy, freq) => {
+      const p = freq / sequence.length;
+      return entropy - p * Math.log2(p);
+    }, 0);
+  }
+
+  // Identify potential RNG seeds based on patterns
+  identifyPotentialSeeds(symbols) {
+    // Look for characteristic patterns that might indicate specific seeds
+    const patterns = this.findCharacteristicPatterns(symbols);
+    
+    patterns.forEach(pattern => {
+      // Use Monte Carlo simulation to test if pattern matches known seed patterns
+      const potentialSeeds = this.simulateSeedPatterns(pattern);
+      potentialSeeds.forEach(seed => this.patternTracking.potentialSeeds.add(seed));
+    });
+    
+    // Clean up old seeds that no longer match recent patterns
+    this.cleanupPotentialSeeds(symbols);
+  }
+
+  // Find characteristic patterns that might indicate specific seeds
+  findCharacteristicPatterns(symbols) {
+    const patterns = [];
+    const windowSizes = [3, 4, 5, 6];
+    
+    windowSizes.forEach(size => {
+      for (let i = 0; i <= symbols.length - size; i++) {
+        const pattern = symbols.slice(i, i + size);
+        const patternStr = pattern.join('');
+        
+        // Check if this pattern appears multiple times
+        const occurrences = this.countPatternOccurrences(symbols, pattern);
+        if (occurrences > 1) {
+          patterns.push({
+            pattern: patternStr,
+            occurrences,
+            positions: this.findPatternPositions(symbols, pattern)
+          });
+        }
+      }
+    });
+    
+    return patterns;
+  }
+
+  // Count pattern occurrences in sequence
+  countPatternOccurrences(symbols, pattern) {
+    let count = 0;
+    for (let i = 0; i <= symbols.length - pattern.length; i++) {
+      if (symbols.slice(i, i + pattern.length).every((val, idx) => val === pattern[idx])) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  // Find positions where pattern occurs
+  findPatternPositions(symbols, pattern) {
+    const positions = [];
+    for (let i = 0; i <= symbols.length - pattern.length; i++) {
+      if (symbols.slice(i, i + pattern.length).every((val, idx) => val === pattern[idx])) {
+        positions.push(i);
+      }
+    }
+    return positions;
+  }
+
+  // Simulate potential seed patterns
+  simulateSeedPatterns(pattern) {
+    const potentialSeeds = new Set();
+    const numSimulations = 1000;
+    
+    // Test different seeds
+    for (let seed = 0; seed < numSimulations; seed++) {
+      const simulatedSequence = this.simulateRNGSequence(seed, pattern.pattern.length * 2);
+      if (this.sequenceContainsPattern(simulatedSequence, pattern.pattern)) {
+        potentialSeeds.add(seed);
+      }
+    }
+    
+    return potentialSeeds;
+  }
+
+  // Simulate RNG sequence with given seed
+  simulateRNGSequence(seed, length) {
+    const sequence = [];
+    let state = seed;
+    
+    for (let i = 0; i < length; i++) {
+      // Simple LCG parameters (for demonstration)
+      state = (1103515245 * state + 12345) & 0x7fffffff;
+      sequence.push(state % 4);
+    }
+    
+    return sequence;
+  }
+
+  // Check if sequence contains pattern
+  sequenceContainsPattern(sequence, pattern) {
+    const patternArr = pattern.split('').map(Number);
+    return sequence.some((_, i) => 
+      i <= sequence.length - patternArr.length &&
+      sequence.slice(i, i + patternArr.length).every((val, idx) => val === patternArr[idx])
+    );
+  }
+
+  // Clean up seeds that no longer match recent patterns
+  cleanupPotentialSeeds(recentSymbols) {
+    const validSeeds = new Set();
+    
+    this.patternTracking.potentialSeeds.forEach(seed => {
+      const simulatedSequence = this.simulateRNGSequence(seed, recentSymbols.length);
+      if (this.sequenceSimilarity(simulatedSequence, recentSymbols) > 0.7) {
+        validSeeds.add(seed);
+      }
+    });
+    
+    this.patternTracking.potentialSeeds = validSeeds;
+  }
+
+  // Calculate similarity between two sequences
+  sequenceSimilarity(seq1, seq2) {
+    const length = Math.min(seq1.length, seq2.length);
+    let matches = 0;
+    
+    for (let i = 0; i < length; i++) {
+      if (seq1[i] === seq2[i]) matches++;
+    }
+    
+    return matches / length;
   }
 }
 
