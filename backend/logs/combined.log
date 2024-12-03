@@ -10947,3 +10947,11 @@
 {"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-01T18:18:23.750Z"}
 {"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-01T18:18:23.750Z"}
 {"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-01T18:18:23.752Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T05:31:58.465Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T05:31:58.663Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T05:31:58.664Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T05:31:58.665Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T05:31:58.665Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T05:31:58.667Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T05:31:58.672Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T05:31:58.678Z"}
