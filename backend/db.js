@@ -1,14 +1,6 @@
-const { Pool } = require('pg');
+const { pool } = require('./initDb');
 const logger = require('./utils/logger');
 require('dotenv').config();
-
-// Create a single pool instance
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:Redman1303!@localhost:5432/postgres',
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
 
 // Log database connection events
 pool.on('connect', () => {

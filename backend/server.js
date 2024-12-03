@@ -5,11 +5,13 @@ const { exec } = require('child_process');
 const util = require('util');
 const sequencesRouter = require('./routes/sequences');
 const analysisRouter = require('./routes/analysis');
+const { initializeDatabase } = require('./initDb');
 
 const execAsync = util.promisify(exec);
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
@@ -23,8 +25,6 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).send('Something broke!');
 });
-
-const PORT = process.env.PORT || 5000;
 
 async function isPortInUse(port) {
   try {
@@ -60,42 +60,50 @@ async function killProcessOnPort(port) {
 
 // Function to start server with retries
 async function startServer(retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      if (await isPortInUse(PORT)) {
-        console.log(`Port ${PORT} is in use. Attempting to free it...`);
-        await killProcessOnPort(PORT);
-        // Wait a bit for the port to be freed
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+  try {
+    // Initialize database before starting server
+    await initializeDatabase();
+    
+    for (let i = 0; i < retries; i++) {
+      try {
+        if (await isPortInUse(PORT)) {
+          console.log(`Port ${PORT} is in use. Attempting to free it...`);
+          await killProcessOnPort(PORT);
+          // Wait a bit for the port to be freed
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
-      const server = app.listen(PORT, () => {
-        console.log(`Server is running on port ${PORT}`);
-      });
-
-      // Handle graceful shutdown
-      const shutdown = async () => {
-        console.info('Shutdown signal received. Closing server...');
-        server.close(() => {
-          console.log('Server closed');
-          process.exit(0);
+        const server = app.listen(PORT, () => {
+          console.log(`Server is running on port ${PORT}`);
         });
-      };
 
-      process.on('SIGTERM', shutdown);
-      process.on('SIGINT', shutdown);
+        // Handle graceful shutdown
+        const shutdown = async () => {
+          console.info('Shutdown signal received. Closing server...');
+          server.close(() => {
+            console.log('Server closed');
+            process.exit(0);
+          });
+        };
 
-      // If we get here, server started successfully
-      return;
-    } catch (error) {
-      console.error(`Attempt ${i + 1} failed:`, error.message);
-      if (i === retries - 1) {
-        console.error(`Failed to start server after ${retries} attempts`);
-        process.exit(1);
+        process.on('SIGTERM', shutdown);
+        process.on('SIGINT', shutdown);
+
+        // If we get here, server started successfully
+        return;
+      } catch (error) {
+        console.error(`Attempt ${i + 1} failed:`, error.message);
+        if (i === retries - 1) {
+          console.error(`Failed to start server after ${retries} attempts`);
+          process.exit(1);
+        }
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, 2000));
     }
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    process.exit(1);
   }
 }
 

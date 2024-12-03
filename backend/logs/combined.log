@@ -11198,3 +11198,105 @@
 {"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:12:27.077Z"}
 {"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:12:27.083Z"}
 {"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:12:27.085Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:14:39.860Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:14:39.863Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:14:39.865Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:14:39.870Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:14:39.871Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T09:15:04.311Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T09:15:04.313Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T09:15:04.315Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T09:15:04.321Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T09:15:04.323Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:15:04.360Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T09:15:04.360Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-03T09:15:04.362Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T09:15:04.364Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T09:15:04.365Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-03T09:15:04.367Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T09:15:07.576Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T09:15:07.577Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T09:15:07.586Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T09:15:07.587Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T09:15:07.587Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T09:15:07.588Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-03T09:15:07.590Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T09:15:19.033Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T09:15:19.033Z"}
+{"length":90,"level":"info","message":"[DB] Generating test data","seedType":"lcg","seedValue":1733217319034,"service":"game-analysis","timestamp":"2024-12-03T09:15:19.034Z"}
+{"code":"42703","file":"parse_target.c","length":135,"level":"error","line":"1070","message":"[DB] Error generating test data: column \"entropy_value\" of relation \"sequences\" does not exist","name":"error","position":"63","routine":"checkInsertTargets","service":"game-analysis","severity":"ERROR","stack":"error: column \"entropy_value\" of relation \"sequences\" does not exist\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Promise.all (index 0)\n    at async c:\\Users\\User\\trial\\backend\\routes\\sequences.js:276:5","timestamp":"2024-12-03T09:15:19.056Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:20:15.895Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:20:15.898Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:20:15.901Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:20:15.907Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:20:15.908Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:20:37.060Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:20:37.063Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:20:37.065Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:20:37.071Z"}
+{"level":"info","message":"Applying migration: 001_create_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:20:37.072Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:20:37.073Z"}
+{"code":"42830","file":"tablecmds.c","length":162,"level":"error","line":"12127","message":"Error applying migration 001_create_tables.sql: there is no unique constraint matching given keys for referenced table \"sequence_history\"","name":"error","routine":"transformFkeyCheckAttrs","service":"game-analysis","severity":"ERROR","stack":"error: there is no unique constraint matching given keys for referenced table \"sequence_history\"\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg-pool\\index.js:45:11\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:44:21)\n    at async startServer (c:\\Users\\User\\trial\\backend\\server.js:65:5)","timestamp":"2024-12-03T09:20:37.116Z"}
+{"level":"info","message":"Applying migration: 001_create_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:21:14.169Z"}
+{"code":"42830","file":"tablecmds.c","length":162,"level":"error","line":"12127","message":"Error applying migration 001_create_tables.sql: there is no unique constraint matching given keys for referenced table \"sequence_history\"","name":"error","routine":"transformFkeyCheckAttrs","service":"game-analysis","severity":"ERROR","stack":"error: there is no unique constraint matching given keys for referenced table \"sequence_history\"\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg-pool\\index.js:45:11\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:44:21)","timestamp":"2024-12-03T09:21:14.217Z"}
+{"level":"info","message":"Applying migration: 001_create_base_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:28:32.657Z"}
+{"level":"info","message":"Successfully applied migration: 001_create_base_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:28:32.710Z"}
+{"level":"info","message":"Applying migration: 002_pattern_analytics.sql","service":"game-analysis","timestamp":"2024-12-03T09:28:32.711Z"}
+{"code":"42803","file":"parse_agg.c","length":113,"level":"error","line":"681","message":"Error applying migration 002_pattern_analytics.sql: aggregate function calls cannot be nested","name":"error","position":"797","routine":"check_agg_arguments","service":"game-analysis","severity":"ERROR","stack":"error: aggregate function calls cannot be nested\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg-pool\\index.js:45:11\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:44:21)","timestamp":"2024-12-03T09:28:32.747Z"}
+{"level":"info","message":"Migration already applied: 001_create_base_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:29:17.677Z"}
+{"level":"info","message":"Applying migration: 002_pattern_analytics.sql","service":"game-analysis","timestamp":"2024-12-03T09:29:17.681Z"}
+{"code":"42803","file":"parse_agg.c","length":113,"level":"error","line":"681","message":"Error applying migration 002_pattern_analytics.sql: aggregate function calls cannot be nested","name":"error","position":"579","routine":"check_agg_arguments","service":"game-analysis","severity":"ERROR","stack":"error: aggregate function calls cannot be nested\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg-pool\\index.js:45:11\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:44:21)","timestamp":"2024-12-03T09:29:17.726Z"}
+{"level":"info","message":"Migration already applied: 001_create_base_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:29:56.275Z"}
+{"level":"info","message":"Applying migration: 002_pattern_analytics.sql","service":"game-analysis","timestamp":"2024-12-03T09:29:56.278Z"}
+{"code":"42830","file":"tablecmds.c","length":155,"level":"error","line":"12127","message":"Error applying migration 002_pattern_analytics.sql: there is no unique constraint matching given keys for referenced table \"sequences\"","name":"error","routine":"transformFkeyCheckAttrs","service":"game-analysis","severity":"ERROR","stack":"error: there is no unique constraint matching given keys for referenced table \"sequences\"\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg-pool\\index.js:45:11\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:44:21)","timestamp":"2024-12-03T09:29:56.323Z"}
+{"level":"info","message":"Migration already applied: 001_create_base_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:30:46.943Z"}
+{"level":"info","message":"Applying migration: 002_pattern_analytics.sql","service":"game-analysis","timestamp":"2024-12-03T09:30:46.946Z"}
+{"code":"42830","file":"tablecmds.c","length":155,"level":"error","line":"12127","message":"Error applying migration 002_pattern_analytics.sql: there is no unique constraint matching given keys for referenced table \"sequences\"","name":"error","routine":"transformFkeyCheckAttrs","service":"game-analysis","severity":"ERROR","stack":"error: there is no unique constraint matching given keys for referenced table \"sequences\"\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg-pool\\index.js:45:11\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:44:21)","timestamp":"2024-12-03T09:30:46.993Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:35:22.659Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:35:22.662Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:35:22.664Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:35:22.670Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:35:22.673Z"}
+{"level":"info","message":"Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:35:22.767Z"}
+{"level":"info","message":"Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:35:22.768Z"}
+{"code":"42703","file":"parse_relation.c","length":103,"level":"error","line":"3721","message":"Database initialization failed: column \"name\" does not exist","name":"error","position":"8","routine":"errorMissingColumn","service":"game-analysis","severity":"ERROR","stack":"error: column \"name\" does not exist\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:45:26)\n    at async startServer (c:\\Users\\User\\trial\\backend\\server.js:65:5)","timestamp":"2024-12-03T09:35:22.770Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:35:32.870Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:35:32.873Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:35:32.875Z"}
+{"level":"info","message":"Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:35:32.875Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:35:32.876Z"}
+{"level":"info","message":"Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:35:32.877Z"}
+{"code":"42703","file":"parse_relation.c","length":103,"level":"error","line":"3721","message":"Database initialization failed: column \"name\" does not exist","name":"error","position":"8","routine":"errorMissingColumn","service":"game-analysis","severity":"ERROR","stack":"error: column \"name\" does not exist\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:45:26)\n    at async startServer (c:\\Users\\User\\trial\\backend\\server.js:65:5)","timestamp":"2024-12-03T09:35:32.880Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:37:01.353Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:37:01.357Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:37:01.358Z"}
+{"level":"info","message":"Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:37:01.358Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:37:01.360Z"}
+{"level":"info","message":"Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:37:01.360Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:37:01.366Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:37:01.369Z"}
+{"level":"info","message":"Applying migration: 001_create_base_tables.sql","service":"game-analysis","timestamp":"2024-12-03T09:37:01.377Z"}
+{"level":"info","message":"Migration 001_create_base_tables.sql applied successfully","service":"game-analysis","timestamp":"2024-12-03T09:37:01.407Z"}
+{"level":"info","message":"Applying migration: 002_pattern_analytics.sql","service":"game-analysis","timestamp":"2024-12-03T09:37:01.407Z"}
+{"code":"42601","file":"scan.l","length":140,"level":"error","line":"1248","message":"Error executing statement in 002_pattern_analytics.sql: unterminated dollar-quoted string at or near \"$$\nDECLARE\n    curr_date DATE\"","name":"error","position":"117","routine":"scanner_yyerror","service":"game-analysis","severity":"ERROR","stack":"error: unterminated dollar-quoted string at or near \"$$\nDECLARE\n    curr_date DATE\"\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:68:17)\n    at async startServer (c:\\Users\\User\\trial\\backend\\server.js:65:5)","timestamp":"2024-12-03T09:37:01.417Z"}
+{"level":"error","message":"Failed statement:","service":"game-analysis","timestamp":"2024-12-03T09:37:01.417Z"}
+{"code":"42601","file":"scan.l","length":140,"level":"error","line":"1248","message":"Database initialization failed: unterminated dollar-quoted string at or near \"$$\nDECLARE\n    curr_date DATE\"","name":"error","position":"117","routine":"scanner_yyerror","service":"game-analysis","severity":"ERROR","stack":"error: unterminated dollar-quoted string at or near \"$$\nDECLARE\n    curr_date DATE\"\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async initializeDatabase (c:\\Users\\User\\trial\\backend\\initDb.js:68:17)\n    at async startServer (c:\\Users\\User\\trial\\backend\\server.js:65:5)","timestamp":"2024-12-03T09:37:01.433Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:53:38.971Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:53:38.975Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:53:38.977Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:53:38.980Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:53:38.987Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:53:38.990Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:56:17.785Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:56:27.831Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:56:27.835Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:56:27.836Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:56:27.838Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:56:27.844Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:56:27.846Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:57:25.315Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:57:25.318Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:57:25.320Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:57:25.321Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:57:25.328Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:57:25.331Z"}
