@@ -10955,3 +10955,246 @@
 {"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T05:31:58.667Z"}
 {"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T05:31:58.672Z"}
 {"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T05:31:58.678Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:32:59.337Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T07:32:59.550Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:32:59.551Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T07:32:59.552Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T07:32:59.552Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T07:32:59.554Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T07:32:59.559Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T07:32:59.563Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:33:19.663Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:33:19.665Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:33:19.666Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:33:19.667Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:33:19.674Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-03T07:33:19.675Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:33:19.676Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:33:19.678Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:33:19.679Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-03T07:33:19.680Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:33:27.149Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:33:27.150Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:33:27.162Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:33:27.162Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:33:27.163Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.164Z"}
+{"level":"info","message":"Analyzing 90 symbols","service":"game-analysis","timestamp":"2024-12-03T07:33:27.166Z"}
+{"level":"info","message":"Running markovChain analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.166Z"}
+{"confidence":0.35,"level":"warn","message":"Invalid prediction from markovChain:","prediction":"1","service":"game-analysis","timestamp":"2024-12-03T07:33:27.167Z"}
+{"level":"info","message":"markovChain analysis completed in 1ms","service":"game-analysis","timestamp":"2024-12-03T07:33:27.167Z"}
+{"level":"info","message":"Running entropy analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.167Z"}
+{"confidence":0.25,"level":"debug","message":"Storing model prediction","modelName":"entropy","predictedSymbol":0,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.168Z"}
+{"error":{"code":"23514","detail":"Partition key of the failing row contains (created_at) = (2024-12-03 18:33:27.163104).","file":"execPartition.c","length":242,"line":"332","name":"error","routine":"ExecFindPartition","schema":"public","severity":"ERROR","table":"model_predictions"},"level":"error","message":"Failed to store model prediction","modelName":"entropy","predictedSymbol":0,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.169Z"}
+{"code":"23514","detail":"Partition key of the failing row contains (created_at) = (2024-12-03 18:33:27.163104).","file":"execPartition.c","length":242,"level":"error","line":"332","message":"Error in entropy analysis: no partition of relation \"model_predictions\" found for row","name":"error","routine":"ExecFindPartition","schema":"public","service":"game-analysis","severity":"ERROR","stack":"error: no partition of relation \"model_predictions\" found for row\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.storeModelPrediction (c:\\Users\\User\\trial\\backend\\db.js:177:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1558:11","table":"model_predictions","timestamp":"2024-12-03T07:33:27.170Z"}
+{"level":"info","message":"Running chiSquare analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.170Z"}
+{"confidence":0.95,"level":"debug","message":"Storing model prediction","modelName":"chiSquare","predictedSymbol":1,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.171Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to store model prediction","modelName":"chiSquare","predictedSymbol":1,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.171Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error in chiSquare analysis: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.storeModelPrediction (c:\\Users\\User\\trial\\backend\\db.js:177:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1558:11","timestamp":"2024-12-03T07:33:27.172Z"}
+{"level":"info","message":"Running monteCarlo analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.172Z"}
+{"confidence":0.265,"level":"debug","message":"Storing model prediction","modelName":"monteCarlo","predictedSymbol":1,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.174Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to store model prediction","modelName":"monteCarlo","predictedSymbol":1,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.174Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error in monteCarlo analysis: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.storeModelPrediction (c:\\Users\\User\\trial\\backend\\db.js:177:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1558:11","timestamp":"2024-12-03T07:33:27.174Z"}
+{"level":"info","message":"Running arima analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.175Z"}
+{"confidence":0,"level":"debug","message":"Storing model prediction","modelName":"arima","predictedSymbol":0,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.736Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to store model prediction","modelName":"arima","predictedSymbol":0,"sequenceId":90,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.737Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error in arima analysis: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.storeModelPrediction (c:\\Users\\User\\trial\\backend\\db.js:177:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1558:11","timestamp":"2024-12-03T07:33:27.738Z"}
+{"level":"info","message":"Running lstm analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.738Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from lstm:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.738Z"}
+{"level":"info","message":"lstm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:33:27.738Z"}
+{"level":"info","message":"Running hmm analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.739Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from hmm:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:33:27.739Z"}
+{"level":"info","message":"hmm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:33:27.739Z"}
+{"level":"info","message":"Running rng analysis...","service":"game-analysis","timestamp":"2024-12-03T07:33:27.739Z"}
+{"level":"warn","message":"Invalid prediction from rng:","service":"game-analysis","timestamp":"2024-12-03T07:33:27.764Z"}
+{"level":"info","message":"rng analysis completed in 24ms","service":"game-analysis","timestamp":"2024-12-03T07:33:27.765Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"markovChain","service":"game-analysis","timestamp":"2024-12-03T07:33:27.765Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"markovChain","service":"game-analysis","timestamp":"2024-12-03T07:33:27.766Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for markovChain: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.766Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"entropy","service":"game-analysis","timestamp":"2024-12-03T07:33:27.766Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"entropy","service":"game-analysis","timestamp":"2024-12-03T07:33:27.767Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for entropy: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.767Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"chiSquare","service":"game-analysis","timestamp":"2024-12-03T07:33:27.767Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"chiSquare","service":"game-analysis","timestamp":"2024-12-03T07:33:27.768Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for chiSquare: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.768Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"monteCarlo","service":"game-analysis","timestamp":"2024-12-03T07:33:27.768Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"monteCarlo","service":"game-analysis","timestamp":"2024-12-03T07:33:27.769Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for monteCarlo: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.769Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"arima","service":"game-analysis","timestamp":"2024-12-03T07:33:27.769Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"arima","service":"game-analysis","timestamp":"2024-12-03T07:33:27.770Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for arima: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.770Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"lstm","service":"game-analysis","timestamp":"2024-12-03T07:33:27.770Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"lstm","service":"game-analysis","timestamp":"2024-12-03T07:33:27.771Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for lstm: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.771Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"hmm","service":"game-analysis","timestamp":"2024-12-03T07:33:27.772Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"hmm","service":"game-analysis","timestamp":"2024-12-03T07:33:27.772Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for hmm: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.772Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"rng","service":"game-analysis","timestamp":"2024-12-03T07:33:27.773Z"}
+{"error":{"code":"25P02","file":"postgres.c","length":145,"line":"1502","name":"error","routine":"exec_parse_message","severity":"ERROR"},"level":"error","message":"Failed to get model performance","modelName":"rng","service":"game-analysis","timestamp":"2024-12-03T07:33:27.773Z"}
+{"code":"25P02","file":"postgres.c","length":145,"level":"error","line":"1502","message":"Error fetching performance metrics for rng: current transaction is aborted, commands ignored until end of transaction block","name":"error","routine":"exec_parse_message","service":"game-analysis","severity":"ERROR","stack":"error: current transaction is aborted, commands ignored until end of transaction block\n    at c:\\Users\\User\\trial\\backend\\node_modules\\pg\\lib\\client.js:535:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Object.getModelPerformance (c:\\Users\\User\\trial\\backend\\db.js:346:22)\n    at async c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1603:25","timestamp":"2024-12-03T07:33:27.773Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:34:11.710Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T07:34:11.908Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:34:11.908Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T07:34:11.910Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T07:34:11.910Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T07:34:11.912Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T07:34:11.917Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T07:34:11.920Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:34:16.753Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:34:16.754Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:34:16.764Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:34:16.765Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:34:16.766Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:16.768Z"}
+{"level":"info","message":"Analyzing 0 symbols","service":"game-analysis","timestamp":"2024-12-03T07:34:16.770Z"}
+{"level":"debug","message":"Executing database query","params":[0],"query":"INSERT INTO sequences (symbol) VALUES ($1) RETURNING *","service":"game-analysis","timestamp":"2024-12-03T07:34:22.859Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":1,"service":"game-analysis","timestamp":"2024-12-03T07:34:22.862Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT COUNT(*) FROM sequences","service":"game-analysis","timestamp":"2024-12-03T07:34:22.863Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":1,"service":"game-analysis","timestamp":"2024-12-03T07:34:22.864Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:34:22.872Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:34:22.872Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:34:22.873Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:22.874Z"}
+{"level":"info","message":"Analyzing 1 symbols","service":"game-analysis","timestamp":"2024-12-03T07:34:22.876Z"}
+{"level":"debug","message":"Executing database query","params":[1],"query":"INSERT INTO sequences (symbol) VALUES ($1) RETURNING *","service":"game-analysis","timestamp":"2024-12-03T07:34:36.681Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":1,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.682Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT COUNT(*) FROM sequences","service":"game-analysis","timestamp":"2024-12-03T07:34:36.683Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":1,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.684Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:34:36.704Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:34:36.704Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:34:36.705Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.706Z"}
+{"level":"info","message":"Analyzing 2 symbols","service":"game-analysis","timestamp":"2024-12-03T07:34:36.707Z"}
+{"level":"info","message":"Running markovChain analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.708Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from markovChain:","service":"game-analysis","timestamp":"2024-12-03T07:34:36.709Z"}
+{"level":"info","message":"markovChain analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.709Z"}
+{"level":"info","message":"Running entropy analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.710Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from entropy:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.710Z"}
+{"level":"info","message":"entropy analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.710Z"}
+{"level":"info","message":"Running chiSquare analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.710Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from chiSquare:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.711Z"}
+{"level":"info","message":"chiSquare analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.711Z"}
+{"level":"info","message":"Running monteCarlo analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.711Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from monteCarlo:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.712Z"}
+{"level":"info","message":"monteCarlo analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.712Z"}
+{"level":"info","message":"Running arima analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.712Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from arima:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.713Z"}
+{"level":"info","message":"arima analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.713Z"}
+{"level":"info","message":"Running lstm analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.713Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from lstm:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.713Z"}
+{"level":"info","message":"lstm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.714Z"}
+{"level":"info","message":"Running hmm analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.714Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from hmm:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.714Z"}
+{"level":"info","message":"hmm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.714Z"}
+{"level":"info","message":"Running rng analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:36.715Z"}
+{"level":"warn","message":"Invalid prediction from rng:","service":"game-analysis","timestamp":"2024-12-03T07:34:36.715Z"}
+{"level":"info","message":"rng analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:36.715Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"markovChain","service":"game-analysis","timestamp":"2024-12-03T07:34:36.716Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"markovChain","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.718Z"}
+{"level":"error","message":"Error fetching performance metrics for markovChain: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.719Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"entropy","service":"game-analysis","timestamp":"2024-12-03T07:34:36.719Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"entropy","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.719Z"}
+{"level":"error","message":"Error fetching performance metrics for entropy: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.720Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"chiSquare","service":"game-analysis","timestamp":"2024-12-03T07:34:36.720Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"chiSquare","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.720Z"}
+{"level":"error","message":"Error fetching performance metrics for chiSquare: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.721Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"monteCarlo","service":"game-analysis","timestamp":"2024-12-03T07:34:36.721Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"monteCarlo","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.722Z"}
+{"level":"error","message":"Error fetching performance metrics for monteCarlo: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.722Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"arima","service":"game-analysis","timestamp":"2024-12-03T07:34:36.722Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"arima","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.723Z"}
+{"level":"error","message":"Error fetching performance metrics for arima: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.724Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"lstm","service":"game-analysis","timestamp":"2024-12-03T07:34:36.724Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"lstm","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.724Z"}
+{"level":"error","message":"Error fetching performance metrics for lstm: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.725Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"hmm","service":"game-analysis","timestamp":"2024-12-03T07:34:36.725Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"hmm","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.726Z"}
+{"level":"error","message":"Error fetching performance metrics for hmm: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.727Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"rng","service":"game-analysis","timestamp":"2024-12-03T07:34:36.727Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"rng","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:36.727Z"}
+{"level":"error","message":"Error fetching performance metrics for rng: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:36.728Z"}
+{"level":"debug","message":"Executing database query","params":[2],"query":"INSERT INTO sequences (symbol) VALUES ($1) RETURNING *","service":"game-analysis","timestamp":"2024-12-03T07:34:38.470Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":1,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.471Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT COUNT(*) FROM sequences","service":"game-analysis","timestamp":"2024-12-03T07:34:38.472Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":1,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.473Z"}
+{"level":"debug","message":"Executing database query","query":"SELECT symbol, created_at FROM sequences ORDER BY created_at ASC","service":"game-analysis","timestamp":"2024-12-03T07:34:38.492Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:34:38.493Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:34:38.493Z"}
+{"level":"debug","message":"Query executed successfully","rowCount":3,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.494Z"}
+{"level":"info","message":"Analyzing 3 symbols","service":"game-analysis","timestamp":"2024-12-03T07:34:38.495Z"}
+{"level":"info","message":"Running markovChain analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.495Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from markovChain:","service":"game-analysis","timestamp":"2024-12-03T07:34:38.496Z"}
+{"level":"info","message":"markovChain analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.496Z"}
+{"level":"info","message":"Running entropy analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.496Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from entropy:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.497Z"}
+{"level":"info","message":"entropy analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.497Z"}
+{"level":"info","message":"Running chiSquare analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.497Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from chiSquare:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.497Z"}
+{"level":"info","message":"chiSquare analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.499Z"}
+{"level":"info","message":"Running monteCarlo analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.499Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from monteCarlo:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.499Z"}
+{"level":"info","message":"monteCarlo analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.499Z"}
+{"level":"info","message":"Running arima analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.500Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from arima:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.500Z"}
+{"level":"info","message":"arima analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.500Z"}
+{"level":"info","message":"Running lstm analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.501Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from lstm:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.501Z"}
+{"level":"info","message":"lstm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.501Z"}
+{"level":"info","message":"Running hmm analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.501Z"}
+{"confidence":0,"level":"warn","message":"Invalid prediction from hmm:","prediction":null,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.502Z"}
+{"level":"info","message":"hmm analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.502Z"}
+{"level":"info","message":"Running rng analysis...","service":"game-analysis","timestamp":"2024-12-03T07:34:38.502Z"}
+{"level":"warn","message":"Invalid prediction from rng:","service":"game-analysis","timestamp":"2024-12-03T07:34:38.502Z"}
+{"level":"info","message":"rng analysis completed in 0ms","service":"game-analysis","timestamp":"2024-12-03T07:34:38.503Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"markovChain","service":"game-analysis","timestamp":"2024-12-03T07:34:38.503Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"markovChain","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.505Z"}
+{"level":"error","message":"Error fetching performance metrics for markovChain: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.506Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"entropy","service":"game-analysis","timestamp":"2024-12-03T07:34:38.506Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"entropy","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.506Z"}
+{"level":"error","message":"Error fetching performance metrics for entropy: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.507Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"chiSquare","service":"game-analysis","timestamp":"2024-12-03T07:34:38.507Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"chiSquare","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.507Z"}
+{"level":"error","message":"Error fetching performance metrics for chiSquare: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.508Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"monteCarlo","service":"game-analysis","timestamp":"2024-12-03T07:34:38.508Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"monteCarlo","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.508Z"}
+{"level":"error","message":"Error fetching performance metrics for monteCarlo: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.509Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"arima","service":"game-analysis","timestamp":"2024-12-03T07:34:38.509Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"arima","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.510Z"}
+{"level":"error","message":"Error fetching performance metrics for arima: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.510Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"lstm","service":"game-analysis","timestamp":"2024-12-03T07:34:38.510Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"lstm","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.511Z"}
+{"level":"error","message":"Error fetching performance metrics for lstm: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.511Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"hmm","service":"game-analysis","timestamp":"2024-12-03T07:34:38.511Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"hmm","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.512Z"}
+{"level":"error","message":"Error fetching performance metrics for hmm: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.512Z"}
+{"level":"debug","limit":1,"message":"Getting model performance","modelName":"rng","service":"game-analysis","timestamp":"2024-12-03T07:34:38.512Z"}
+{"level":"debug","message":"Retrieved model performance","modelName":"rng","rowCount":0,"service":"game-analysis","timestamp":"2024-12-03T07:34:38.513Z"}
+{"level":"error","message":"Error fetching performance metrics for rng: Cannot read properties of undefined (reading '0')","service":"game-analysis","stack":"TypeError: Cannot read properties of undefined (reading '0')\n    at c:\\Users\\User\\trial\\backend\\routes\\analysis.js:1604:48\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-12-03T07:34:38.513Z"}
+{"level":"debug","message":"Getting database client from pool","service":"game-analysis","timestamp":"2024-12-03T07:50:40.438Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T07:50:40.642Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T07:50:40.643Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T07:50:40.644Z"}
+{"level":"debug","message":"Successfully acquired database client","service":"game-analysis","timestamp":"2024-12-03T07:50:40.644Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T07:50:40.646Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T07:50:40.652Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T07:50:40.657Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:02:01.045Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:02:01.048Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:02:01.050Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:02:01.056Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:02:01.057Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:02:19.585Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:02:19.588Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:02:19.590Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:02:19.595Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:02:19.597Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:09:41.455Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:09:41.458Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:09:41.460Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:09:41.466Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:09:41.468Z"}
+{"level":"info","message":"[DB] New client connected to database","service":"game-analysis","timestamp":"2024-12-03T09:12:27.072Z"}
+{"level":"info","message":"[DB] Testing database connection...","service":"game-analysis","timestamp":"2024-12-03T09:12:27.075Z"}
+{"level":"info","message":"[DB] Database connected successfully","service":"game-analysis","timestamp":"2024-12-03T09:12:27.077Z"}
+{"level":"info","message":"[DB] Tables already exist","service":"game-analysis","timestamp":"2024-12-03T09:12:27.083Z"}
+{"level":"info","message":"[DB] Found existing sequences table with","service":"game-analysis","timestamp":"2024-12-03T09:12:27.085Z"}
