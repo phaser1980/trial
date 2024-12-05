@@ -1601,13 +1601,33 @@ router.get('/', async (req, res) => {
     for (const name of Object.keys(analysisTools)) {
       try {
         const metrics = await db.getModelPerformance(client, name, 1);
-        performanceMetrics[name] = metrics.rows[0] || {
+        const defaultMetrics = {
           accuracy: 0,
           confidence_calibration: 0,
-          needs_retraining: false
+          needs_retraining: false,
+          total_predictions: 0,
+          correct_predictions: 0,
+          model_type: name
         };
+
+        if (metrics && metrics.rows && metrics.rows.length > 0) {
+          performanceMetrics[name] = {
+            ...defaultMetrics,
+            ...metrics.rows[0]
+          };
+        } else {
+          performanceMetrics[name] = defaultMetrics;
+        }
       } catch (error) {
         logger.error(`Error fetching performance metrics for ${name}:`, error);
+        performanceMetrics[name] = {
+          accuracy: 0,
+          confidence_calibration: 0,
+          needs_retraining: false,
+          total_predictions: 0,
+          correct_predictions: 0,
+          model_type: name
+        };
       }
     }
 

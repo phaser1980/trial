@@ -1,61 +1,52 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
+const DatabaseManager = require('../utils/dbManager');
 const logger = require('../utils/logger');
 const PatternAnalyzer = require('../utils/patternAnalysis');
 const RNGGenerator = require('../utils/rngGenerators');
+const { errorBoundary, validateSequence, AppError } = require('../middleware/errorBoundary');
+const { v4: uuidv4 } = require('uuid');
 
 // Check table structure (for debugging only)
-router.get('/debug/schema', async (req, res) => {
-  try {
-    const result = await db.query(`
+router.get('/debug/schema', errorBoundary(async (req, res) => {
+  const result = await DatabaseManager.withTransaction(async (client) => {
+    const result = await client.query(`
       SELECT column_name, data_type, column_default
       FROM information_schema.columns
       WHERE table_name = 'sequences'
       ORDER BY ordinal_position;
     `);
     logger.info('[DB] Retrieved schema information', { columns: result.rows });
-    res.json(result.rows);
-  } catch (err) {
-    logger.error('[DB] Error checking schema:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
+    return result.rows;
+  });
+  res.json(result);
+}));
 
 // Get all sequences
-router.get('/', async (req, res) => {
-  try {
-    console.log('[DB] Fetching all sequences');
-    const result = await db.query(
+router.get('/', errorBoundary(async (req, res) => {
+  const result = await DatabaseManager.withTransaction(async (client) => {
+    logger.info('[DB] Fetching all sequences');
+    const queryResult = await client.query(
       'SELECT symbol, created_at FROM sequences ORDER BY created_at ASC'
     );
     
-    const sequence = result.rows.map(row => ({
+    return queryResult.rows.map(row => ({
       symbol: row.symbol,
       created_at: row.created_at.toISOString()
     }));
-    
-    console.log('[DB] Retrieved sequences:', {
-      count: sequence.length,
-      first: sequence[0],
-      last: sequence[sequence.length - 1]
-    });
-    
-    res.json({ sequence });
-  } catch (err) {
-    console.error('[DB] Error fetching sequences:', err);
-    res.json({ sequence: [] });
-  }
-});
+  }, { timeout: 15000 }); // 15s timeout for large queries
+  
+  res.json({ sequence: result });
+}));
 
 // Get recent sequences with pattern analysis
-router.get('/recent', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    const { limit = 100 } = req.query;
+router.get('/recent', errorBoundary(async (req, res) => {
+  const { limit = 100 } = req.query;
+  
+  const result = await DatabaseManager.withTransaction(async (client) => {
     const analyzer = new PatternAnalyzer();
 
-    const result = await client.query(`
+    const sequences = await client.query(`
       SELECT s.*, 
              array_agg(s2.symbol) OVER (
                PARTITION BY (s.created_at::date) 
@@ -71,107 +62,59 @@ router.get('/recent', async (req, res) => {
       LIMIT $1
     `, [limit]);
 
-    // Analyze patterns in the retrieved sequences
-    const analyzedSequences = await Promise.all(
-      result.rows.map(async row => {
-        if (row.symbol_window && row.symbol_window.length >= 3) {
-          const analysis = await analyzer.analyzeSequence(row.symbol_window);
-          return {
-            ...row,
-            pattern_analysis: {
-              entropy: analysis.entropy,
-              patterns: analysis.patterns,
-              transitions: analysis.transitions
-            }
-          };
-        }
-        return row;
-      })
+    // Process sequences in batches to prevent memory issues
+    const analyzedSequences = await DatabaseManager.withBatch(
+      sequences.rows,
+      10, // Process 10 sequences at a time
+      async (_, batch) => {
+        return Promise.all(batch.map(async row => {
+          if (row.symbol_window?.length >= 3) {
+            const analysis = await analyzer.analyzeSequence(row.symbol_window);
+            return {
+              ...row,
+              pattern_analysis: {
+                entropy: analysis.entropy,
+                patterns: analysis.patterns,
+                transitions: analysis.transitions
+              }
+            };
+          }
+          return row;
+        }));
+      }
     );
 
-    logger.info('[Sequences] Retrieved and analyzed recent sequences', {
-      count: analyzedSequences.length
-    });
-
-    res.json({
+    return {
       sequences: analyzedSequences,
       metadata: {
         analyzed_count: analyzedSequences.filter(s => s.pattern_analysis).length,
         total_count: analyzedSequences.length
       }
-    });
-  } catch (error) {
-    logger.error('[Sequences] Error retrieving sequences:', error);
-    res.status(500).json({ error: 'Failed to retrieve sequences' });
-  } finally {
-    client.release();
-  }
-});
+    };
+  }, { 
+    timeout: 30000, // 30s timeout for analysis
+    isolationLevel: 'READ COMMITTED' // Use lower isolation for read-only
+  });
+
+  res.json(result);
+}));
 
 // Add new sequence with immediate analysis
-router.post('/', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    const { symbol } = req.body;
-    if (typeof symbol !== 'number' || symbol < 0 || symbol > 3) {
-      throw new Error('Invalid symbol: must be number between 0 and 3');
-    }
+router.post('/', errorBoundary(async (req, res) => {
+  const { symbol } = req.body;
+  if (typeof symbol !== 'number' || symbol < 0 || symbol > 3) {
+    throw new AppError('Invalid symbol: must be number between 0 and 3', 400);
+  }
 
-    await client.query('BEGIN');
-
+  const result = await DatabaseManager.withTransaction(async (client) => {
     // Insert new symbol
     const result = await client.query(`
-      INSERT INTO sequences (symbol)
-      VALUES ($1)
-      RETURNING id, created_at
+      INSERT INTO sequences (symbol, created_at)
+      VALUES ($1, CURRENT_TIMESTAMP)
+      RETURNING id, symbol, created_at
     `, [symbol]);
 
-    // Get recent sequence window for analysis
-    const windowResult = await client.query(`
-      SELECT array_agg(symbol ORDER BY created_at) as symbols
-      FROM sequences
-      WHERE created_at > NOW() - interval '1 minute'
-      ORDER BY created_at DESC
-      LIMIT 10
-    `);
-
-    const sequence = windowResult.rows[0]?.symbols || [];
-    if (sequence.length >= 3) {
-      const analyzer = new PatternAnalyzer();
-      const analysis = await analyzer.analyzeSequence(sequence);
-
-      // Update the sequence with analysis results
-      await client.query(`
-        UPDATE sequences
-        SET 
-          entropy_value = $1,
-          pattern_detected = $2,
-          metadata = jsonb_set(
-            COALESCE(metadata, '{}'::jsonb),
-            '{pattern_analysis}',
-            $3::jsonb
-          )
-        WHERE id = $4
-      `, [
-        analysis.entropy,
-        analysis.patterns.length > 0,
-        JSON.stringify({
-          patterns: analysis.patterns,
-          transitions: analysis.transitions,
-          analyzed_at: new Date()
-        }),
-        result.rows[0].id
-      ]);
-    }
-
-    await client.query('COMMIT');
-
-    logger.info('[Sequences] Added new sequence with analysis', {
-      id: result.rows[0].id,
-      symbol,
-      windowSize: sequence.length
-    });
-
+    // Send immediate response
     res.json({
       message: 'Sequence added successfully',
       sequence: {
@@ -180,21 +123,84 @@ router.post('/', async (req, res) => {
         created_at: result.rows[0].created_at
       }
     });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    logger.error('[Sequences] Error adding sequence:', error);
-    res.status(500).json({ error: 'Failed to add sequence' });
-  } finally {
-    client.release();
-  }
-});
+
+    // Perform analysis asynchronously
+    const analyzeSequence = async () => {
+      const analysisClient = await DatabaseManager.getClient();
+      try {
+        // Get recent sequence window for analysis (increased to 1 hour)
+        const windowResult = await analysisClient.query(`
+          SELECT 
+            array_agg(symbol ORDER BY created_at) as symbols,
+            COUNT(*) as symbol_count,
+            MAX(created_at) as latest_created_at
+          FROM sequences
+          WHERE created_at > NOW() - interval '1 hour'
+          GROUP BY DATE_TRUNC('hour', created_at)
+          ORDER BY MAX(created_at) DESC
+        `);
+
+        if (!windowResult.rows[0]?.symbols || windowResult.rows[0].symbol_count < 2) {
+          logger.info('Not enough symbols for analysis yet');
+          return;
+        }
+
+        const symbols = windowResult.rows[0].symbols;
+        const analyzer = new PatternAnalyzer();
+        
+        // Initialize performance metrics if needed
+        await analysisClient.query(`
+          INSERT INTO model_performance (model_name, correct_predictions, total_predictions, last_updated)
+          SELECT m.name, 0, 0, CURRENT_TIMESTAMP
+          FROM (
+            VALUES ('markovChain'), ('entropy'), ('chiSquare'), ('monteCarlo'),
+                   ('arima'), ('lstm'), ('hmm'), ('rng')
+          ) AS m(name)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM model_performance WHERE model_name = m.name
+          )
+        `);
+
+        const predictions = await analyzer.analyzeSequence(symbols);
+        
+        // Update model performance metrics
+        for (const [model, prediction] of Object.entries(predictions)) {
+          if (prediction && typeof prediction.confidence === 'number') {
+            await analysisClient.query(`
+              UPDATE model_performance 
+              SET 
+                total_predictions = total_predictions + 1,
+                correct_predictions = CASE 
+                  WHEN $1 = $2 THEN correct_predictions + 1 
+                  ELSE correct_predictions 
+                END,
+                last_updated = CURRENT_TIMESTAMP
+              WHERE model_name = $3
+            `, [prediction.prediction, symbol, model]);
+          }
+        }
+
+        logger.info('Sequence analysis completed successfully', {
+          symbolCount: symbols.length,
+          models: Object.keys(predictions)
+        });
+      } catch (error) {
+        logger.error('Error in async sequence analysis:', error);
+      } finally {
+        analysisClient.release();
+      }
+    };
+
+    // Start analysis in background
+    analyzeSequence().catch(err => {
+      logger.error('Failed to start sequence analysis:', err);
+    });
+  });
+}));
 
 // Undo last symbol
-router.delete('/undo', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    await client.query('BEGIN');
-    
+router.delete('/undo', errorBoundary(async (req, res) => {
+  const result = await DatabaseManager.withTransaction(async (client) => {
     // Get the last symbol before deleting
     const lastSymbol = await client.query(
       'SELECT * FROM sequences ORDER BY created_at DESC LIMIT 1'
@@ -213,110 +219,88 @@ router.delete('/undo', async (req, res) => {
     
     console.log('[DB] Sequences after undo:', verification.rows[0].count);
     
-    await client.query('COMMIT');
-    res.json({ 
+    return { 
       success: true,
       removed: lastSymbol.rows[0],
       remaining: verification.rows[0].count
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('[DB] Error undoing last symbol:', err);
-    res.status(500).json({ error: 'Server error' });
-  } finally {
-    client.release();
-  }
-});
+    };
+  });
+  res.json(result);
+}));
 
 // Generate test data
-router.post('/generate-test-data', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    const { seedType = 'lcg', seedValue = Date.now(), length = 90 } = req.body;
-    
-    logger.info('[DB] Generating test data', { seedType, seedValue, length });
-    await client.query('BEGIN');
-    
-    // Initialize RNG generator
-    const generator = new RNGGenerator(parseInt(seedValue));
-    const sequence = generator.generateSequence(seedType, length);
-    
-    // Calculate entropy for the sequence
-    const entropy = sequence.reduce((acc, curr, idx, arr) => {
-      if (idx === 0) return acc;
-      const p = arr.filter(x => x === curr).length / arr.length;
-      return acc - (p * Math.log2(p));
-    }, 0);
-    
-    // Insert sequence with metadata
-    const insertPromises = sequence.map((symbol, index) => {
-      return client.query(`
-        INSERT INTO sequences (
-          symbol, 
-          entropy_value, 
-          pattern_detected,
-          batch_id,
-          metadata
-        ) VALUES ($1, $2, $3, $4, $5)`,
-        [
-          parseInt(symbol),
-          entropy,
-          false, // Will be updated by pattern detection
-          generator.uuid(), // Assuming UUID for batch tracking
-          JSON.stringify({
-            seedType,
-            seedValue,
-            position: index,
-            generatedAt: new Date()
-          })
-        ]
-      );
-    });
-    
-    await Promise.all(insertPromises);
-    await client.query('COMMIT');
-    
-    logger.info('[DB] Test data generated successfully', {
-      sequenceLength: sequence.length,
-      entropy,
-      firstFewSymbols: sequence.slice(0, 5)
-    });
-    
-    res.json({ 
-      message: 'Test data generated successfully',
-      metadata: {
-        seedType,
-        seedValue,
-        length: sequence.length,
-        entropy
-      }
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    logger.error('[DB] Error generating test data:', error);
-    res.status(500).json({ error: 'Failed to generate test data' });
-  } finally {
-    client.release();
+router.post('/generate', errorBoundary(async (req, res) => {
+  const { seedType = 'lcg', seedValue = Date.now(), length = 90 } = req.body;
+  
+  if (!seedValue) {
+    throw new AppError('Missing required parameter: seedValue', 400);
   }
-});
+
+  logger.info('[DB] Generating test data', { seedType, seedValue, length });
+
+  // Generate test data
+  const generator = new RNGGenerator(parseInt(seedValue));
+  generator.setType(seedType);
+  
+  const symbols = [];
+  for (let i = 0; i < length; i++) {
+    // Map the generated number to 0-3 range for symbols
+    symbols.push(generator.next() % 4);
+  }
+
+  // Batch insert all symbols
+  const values = symbols.map((symbol, index) => 
+    `($${index * 3 + 1}, $${index * 3 + 2}, $${index * 3 + 3}::jsonb)`
+  ).join(',');
+  
+  const params = symbols.reduce((params, val, index) => [
+    ...params,
+    val,
+    generator.uuid(),
+    JSON.stringify({
+      position: index + 1,
+      seedType,
+      seedValue,
+      generatedAt: new Date().toISOString()
+    })
+  ], []);
+
+  const result = await DatabaseManager.withTransaction(async (client) => {
+    const result = await client.query(`
+      INSERT INTO sequences (symbol, batch_id, metadata)
+      VALUES ${values}
+      RETURNING id
+    `, params);
+
+    logger.info('[DB] Successfully inserted test data sequences', {
+      count: result.rowCount,
+      batchId: generator.uuid()
+    });
+
+    return {
+      message: 'Test data generated successfully',
+      count: result.rowCount,
+      batchId: generator.uuid(),
+      expectedLength: length
+    };
+  });
+  res.json(result);
+}));
 
 // Analyze sequence and store predictions
-router.post('/analyze', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    const { sequence, metadata = {} } = req.body;
-    if (!Array.isArray(sequence)) {
-      throw new Error('Sequence must be an array of numbers');
-    }
+router.post('/analyze', errorBoundary(async (req, res) => {
+  const { sequence, metadata = {} } = req.body;
+  if (!Array.isArray(sequence)) {
+    throw new AppError('Sequence must be an array of numbers', 400);
+  }
 
-    const analyzer = new PatternAnalyzer();
-    const analysis = await analyzer.analyzeSequence(sequence);
-    
-    // Store analysis results
-    await client.query('BEGIN');
-    
-    // Store in model_predictions
-    const predictionResult = await client.query(`
+  const analyzer = new PatternAnalyzer();
+  const analysis = await analyzer.analyzeSequence(sequence);
+  
+  // Store analysis results
+  // Store in model_predictions
+  const predictionResult = await DatabaseManager.withTransaction(async (client) => {
+    const result = await client.query(`
       INSERT INTO model_predictions (
         sequence_id,
         model_type,
@@ -337,7 +321,7 @@ router.post('/analyze', async (req, res) => {
         timestamp: analysis.metadata.timestamp
       })
     ]);
-    
+
     // Update model_performance if we have ground truth
     if (metadata.actual_seed) {
       await client.query(`
@@ -349,7 +333,7 @@ router.post('/analyze', async (req, res) => {
           metadata
         ) VALUES ($1, $2, $3, $4, $5)
       `, [
-        predictionResult.rows[0].id,
+        result.rows[0].id,
         metadata.actual_seed,
         analysis.patterns[0]?.[0] || null, // Most significant pattern
         JSON.stringify({
@@ -363,35 +347,22 @@ router.post('/analyze', async (req, res) => {
         })
       ]);
     }
-    
-    await client.query('COMMIT');
-    
-    logger.info('[Analysis] Sequence analyzed successfully', {
-      predictionId: predictionResult.rows[0].id,
-      patternCount: analysis.patterns.length
-    });
-    
-    res.json({
+
+    return {
       message: 'Analysis complete',
       results: analysis,
-      predictionId: predictionResult.rows[0].id
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    logger.error('[Analysis] Error analyzing sequence:', error);
-    res.status(500).json({ error: 'Failed to analyze sequence' });
-  } finally {
-    client.release();
-  }
-});
+      predictionId: result.rows[0].id
+    };
+  });
+  res.json(predictionResult);
+}));
 
 // Analyze sequences for RNG seed discovery
-router.post('/discover-seed', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    const { windowSize = 100, minConfidence = 0.7 } = req.body;
-    const analyzer = new PatternAnalyzer();
+router.post('/discover-seed', errorBoundary(async (req, res) => {
+  const { windowSize = 100, minConfidence = 0.7 } = req.body;
+  const analyzer = new PatternAnalyzer();
 
+  const result = await DatabaseManager.withTransaction(async (client) => {
     // Get recent sequences for analysis
     const sequencesResult = await client.query(`
       SELECT array_agg(symbol ORDER BY created_at) as symbols,
@@ -408,7 +379,7 @@ router.post('/discover-seed', async (req, res) => {
 
     const sequence = sequencesResult.rows[0]?.symbols || [];
     if (sequence.length < windowSize) {
-      throw new Error('Insufficient sequence data for analysis');
+      throw new AppError('Insufficient sequence data for analysis', 400);
     }
 
     // Analyze sequence patterns
@@ -446,8 +417,6 @@ router.post('/discover-seed', async (req, res) => {
       .slice(0, 5);
 
     // Store predictions in model_predictions table
-    await client.query('BEGIN');
-
     for (const candidate of topCandidates) {
       await client.query(`
         INSERT INTO model_predictions (
@@ -473,14 +442,7 @@ router.post('/discover-seed', async (req, res) => {
       ]);
     }
 
-    await client.query('COMMIT');
-
-    logger.info('[Seed Discovery] Completed analysis', {
-      candidatesFound: topCandidates.length,
-      topConfidence: topCandidates[0]?.confidence
-    });
-
-    res.json({
+    return {
       message: 'Seed discovery complete',
       candidates: topCandidates,
       analysis: {
@@ -488,42 +450,52 @@ router.post('/discover-seed', async (req, res) => {
         patternCount: analysis.patterns.length,
         windowSize
       }
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    logger.error('[Seed Discovery] Error:', error);
-    res.status(500).json({ error: 'Failed to discover RNG seed' });
-  } finally {
-    client.release();
-  }
-});
+    };
+  });
+  res.json(result);
+}));
 
 // Reset database
-router.post('/reset', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    console.log('[DB] Starting database reset');
+router.post('/reset', errorBoundary(async (req, res) => {
+  const result = await DatabaseManager.withTransaction(async (client) => {
+    logger.info('[DB] Starting database reset');
     
-    // Get count before reset
-    const beforeCount = await client.query('SELECT COUNT(*) FROM sequences');
-    console.log('[DB] Sequences before reset:', beforeCount.rows[0].count);
+    // Get counts before reset
+    const beforeCounts = await client.query(`
+      SELECT 
+        (SELECT COUNT(*) FROM sequences) as sequences_count,
+        (SELECT COUNT(*) FROM model_predictions) as predictions_count,
+        (SELECT COUNT(*) FROM model_performance) as performance_count
+    `);
     
-    await client.query('BEGIN');
-    await client.query('TRUNCATE sequences');
+    logger.info('[DB] Counts before reset:', beforeCounts.rows[0]);
+    
+    // Truncate all related tables in the correct order
+    await client.query(`
+      TRUNCATE TABLE 
+        model_predictions,
+        model_performance,
+        sequences
+      CASCADE
+    `);
     
     // Verify reset
-    const afterCount = await client.query('SELECT COUNT(*) FROM sequences');
-    console.log('[DB] Sequences after reset:', afterCount.rows[0].count);
+    const afterCounts = await client.query(`
+      SELECT 
+        (SELECT COUNT(*) FROM sequences) as sequences_count,
+        (SELECT COUNT(*) FROM model_predictions) as predictions_count,
+        (SELECT COUNT(*) FROM model_performance) as performance_count
+    `);
     
-    await client.query('COMMIT');
-    res.json({ message: 'Database reset successfully' });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('[DB] Error resetting database:', error);
-    res.status(500).json({ error: 'Failed to reset database' });
-  } finally {
-    client.release();
-  }
-});
+    logger.info('[DB] Counts after reset:', afterCounts.rows[0]);
+    
+    return { 
+      message: 'Database reset successfully',
+      before: beforeCounts.rows[0],
+      after: afterCounts.rows[0]
+    };
+  });
+  res.json(result);
+}));
 
 module.exports = router;

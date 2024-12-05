@@ -314,9 +314,9 @@ const API_BASE_URL = 'http://localhost:5000';
 const API_ENDPOINTS = {
   SEQUENCES: `${API_BASE_URL}/api/sequences`,
   ANALYSIS: `${API_BASE_URL}/api/analysis`,
-  ADD_SYMBOL: `${API_BASE_URL}/api/sequences/symbol`,
+  ADD_SYMBOL: `${API_BASE_URL}/api/sequences`,
   UNDO: `${API_BASE_URL}/api/sequences/undo`,
-  GENERATE: `${API_BASE_URL}/api/sequences/generate-test-data`,
+  GENERATE: `${API_BASE_URL}/api/sequences/generate`,
   RESET: `${API_BASE_URL}/api/sequences/reset`
 };
 
@@ -657,7 +657,12 @@ const GameAnalysisPage: React.FC = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify({
+          seedType: 'lcg',
+          seedValue: Date.now(),
+          length: 90
+        })
       });
       
       await loadData();

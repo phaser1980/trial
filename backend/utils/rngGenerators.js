@@ -4,6 +4,7 @@ class RNGGenerator {
   constructor(seed) {
     this.seed = seed;
     this._batchId = uuidv4();
+    this.type = 'lcg'; // default type
   }
 
   uuid() {
@@ -34,23 +35,28 @@ class RNGGenerator {
     return middle;
   }
 
+  setType(type) {
+    this.type = type.toLowerCase();
+    return this;
+  }
+
+  next() {
+    switch(this.type) {
+      case 'xorshift':
+        return this.xorshift();
+      case 'msws':
+        return this.msws();
+      case 'lcg':
+      default:
+        return this.lcg();
+    }
+  }
+
   generateSequence(type = 'lcg', length = 90) {
+    this.setType(type);
     const sequence = [];
     for (let i = 0; i < length; i++) {
-      let num;
-      switch(type.toLowerCase()) {
-        case 'xorshift':
-          num = this.xorshift();
-          break;
-        case 'msws':
-          num = this.msws();
-          break;
-        case 'lcg':
-        default:
-          num = this.lcg();
-      }
-      // Map to 0-3 range for symbols
-      sequence.push(num % 4);
+      sequence.push(this.next());
     }
     return sequence;
   }

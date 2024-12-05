@@ -1,0 +1,2 @@
+-- This migration is superseded by 008_consolidate_model_performance.sql
+-- No operations needed - table structure is handled in 006_update_model_performance.sql

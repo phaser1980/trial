@@ -22,60 +22,64 @@ async function initializeDatabase() {
     await client.query('SELECT NOW()');
     console.log('Database connected successfully');
 
-    // Drop the existing migrations table to start fresh
-    console.log('Dropping existing migrations table...');
-    await client.query('DROP TABLE IF EXISTS migrations CASCADE');
-
-    // Create migrations table if it doesn't exist
-    console.log('Creating migrations table...');
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS migrations (
-        id SERIAL PRIMARY KEY,
-        filename VARCHAR(255) NOT NULL UNIQUE,
-        applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    // Get list of migration files
-    const migrationsDir = path.join(__dirname, 'migrations');
-    const files = await fs.readdir(migrationsDir);
-    const sqlFiles = files
-      .filter(f => f.endsWith('.sql'))
-      .sort(); // Ensure migrations run in order
-
-    console.log('Found migration files:', sqlFiles);
-
     // Begin transaction
     await client.query('BEGIN');
 
     try {
+      // Drop existing tables and sequences in the correct order
+      console.log('Cleaning up existing database objects...');
+      await client.query('DROP TABLE IF EXISTS migrations CASCADE');
+      await client.query('DROP TABLE IF EXISTS sequences CASCADE');
+      await client.query('DROP TABLE IF EXISTS model_performance CASCADE');
+      
+      // Drop sequences explicitly by name
+      const dropSequences = `
+        DO $$ 
+        BEGIN
+          DROP SEQUENCE IF EXISTS migrations_id_seq;
+          DROP SEQUENCE IF EXISTS sequences_id_seq;
+        EXCEPTION 
+          WHEN undefined_table THEN 
+            NULL;
+        END $$;
+      `;
+      await client.query(dropSequences);
+
+      // Create migrations table
+      console.log('Creating migrations table...');
+      await client.query(`
+        CREATE TABLE migrations (
+          id SERIAL PRIMARY KEY,
+          filename VARCHAR(255) NOT NULL UNIQUE,
+          applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // Get list of migration files
+      const migrationsDir = path.join(__dirname, 'migrations');
+      const files = await fs.readdir(migrationsDir);
+      const sqlFiles = files
+        .filter(f => f.endsWith('.sql'))
+        .sort(); // Ensure migrations run in order
+
+      console.log('Found migration files:', sqlFiles);
+
+      // Apply migrations
       for (const file of sqlFiles) {
-        // Check if migration was already applied
-        const { rows } = await client.query(
-          'SELECT filename FROM migrations WHERE filename = $1',
+        const filename = path.join(migrationsDir, file);
+        const appliedMigration = await client.query(
+          'SELECT id FROM migrations WHERE filename = $1',
           [file]
         );
 
-        if (rows.length === 0) {
+        if (appliedMigration.rows.length === 0) {
           console.log(`Applying migration: ${file}`);
-          const filePath = path.join(migrationsDir, file);
-          const sql = await fs.readFile(filePath, 'utf8');
-
-          try {
-            // Execute the entire file as one statement for functions/triggers
-            await client.query(sql);
-            console.log(`Successfully executed ${file}`);
-
-            // Record the migration
-            await client.query(
-              'INSERT INTO migrations (filename) VALUES ($1)',
-              [file]
-            );
-            console.log(`Migration ${file} applied successfully`);
-          } catch (err) {
-            console.error(`Error executing ${file}:`, err);
-            throw err;
-          }
+          const sql = await fs.readFile(filename, 'utf8');
+          await client.query(sql);
+          await client.query(
+            'INSERT INTO migrations (filename) VALUES ($1)',
+            [file]
+          );
         } else {
           console.log(`Migration already applied: ${file}`);
         }
@@ -83,16 +87,15 @@ async function initializeDatabase() {
 
       // Commit transaction
       await client.query('COMMIT');
-      console.log('All migrations completed successfully');
-    } catch (err) {
-      // Rollback on error
+      console.log('Database initialization completed successfully');
+    } catch (error) {
+      // Rollback transaction on error
       await client.query('ROLLBACK');
-      console.error('Migration failed:', err);
-      throw err;
+      throw error;
     }
-  } catch (err) {
-    console.error('Database initialization failed:', err);
-    throw err;
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    throw error;
   } finally {
     client.release();
   }

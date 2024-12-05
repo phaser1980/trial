@@ -32,16 +32,7 @@ CREATE TABLE IF NOT EXISTS model_predictions (
     rng_type VARCHAR(50)
 );
 
--- Create model_performance table
-CREATE TABLE IF NOT EXISTS model_performance (
-    id SERIAL PRIMARY KEY,
-    prediction_id INTEGER REFERENCES model_predictions(id),
-    actual_value TEXT,
-    predicted_value TEXT,
-    error_metrics JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    metadata JSONB DEFAULT '{}'::jsonb
-);
+-- Remove model_performance table creation since it's handled in migration 008
 
 -- Create indexes
 CREATE INDEX idx_sequences_created_at ON sequences(created_at);
