@@ -85,20 +85,56 @@ const errorBoundary = (handler) => async (req, res, next) => {
   }
 };
 
-const validateSequence = (sequence) => {
-  if (!Array.isArray(sequence)) {
-    throw new AppError('INVALID_SEQUENCE', 'Sequence must be an array', 400);
+// Middleware to validate sequence input
+const validateSequence = (req, res, next) => {
+  const { symbol, sequence } = req.body;
+
+  // Handle single symbol input
+  if (symbol !== undefined) {
+    if (!Number.isInteger(symbol) || symbol < 0 || symbol > 3) {
+      throw new AppError(
+        'INVALID_SYMBOL',
+        'Symbol must be an integer between 0 and 3',
+        400
+      );
+    }
+    return next();
+  }
+
+  // Handle sequence array input
+  if (sequence !== undefined) {
+    if (!Array.isArray(sequence)) {
+      throw new AppError(
+        'INVALID_SEQUENCE',
+        'Sequence must be an array',
+        400
+      );
+    }
+    
+    if (sequence.length > 10000) {
+      throw new AppError(
+        'SEQUENCE_TOO_LONG',
+        'Sequence exceeds maximum length',
+        400
+      );
+    }
+    
+    if (!sequence.every(num => Number.isInteger(num) && num >= 0 && num <= 3)) {
+      throw new AppError(
+        'INVALID_SEQUENCE_VALUES',
+        'Sequence values must be integers between 0 and 3',
+        400
+      );
+    }
+  } else {
+    throw new AppError(
+      'MISSING_INPUT',
+      'Request must include either a symbol or sequence',
+      400
+    );
   }
   
-  if (sequence.length > 10000) {
-    throw new AppError('SEQUENCE_TOO_LONG', 'Sequence exceeds maximum length', 400);
-  }
-  
-  if (!sequence.every(num => Number.isInteger(num) && num >= 0 && num <= 3)) {
-    throw new AppError('INVALID_SEQUENCE_VALUES', 'Sequence values must be integers between 0 and 3', 400);
-  }
-  
-  return true;
+  next();
 };
 
 module.exports = {

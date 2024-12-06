@@ -44,8 +44,6 @@ router.get('/recent', errorBoundary(async (req, res) => {
   const { limit = 100 } = req.query;
   
   const result = await DatabaseManager.withTransaction(async (client) => {
-    const analyzer = new PatternAnalyzer();
-
     const sequences = await client.query(`
       SELECT s.*, 
              array_agg(s2.symbol) OVER (
@@ -62,140 +60,115 @@ router.get('/recent', errorBoundary(async (req, res) => {
       LIMIT $1
     `, [limit]);
 
-    // Process sequences in batches to prevent memory issues
-    const analyzedSequences = await DatabaseManager.withBatch(
-      sequences.rows,
-      10, // Process 10 sequences at a time
-      async (_, batch) => {
-        return Promise.all(batch.map(async row => {
-          if (row.symbol_window?.length >= 3) {
-            const analysis = await analyzer.analyzeSequence(row.symbol_window);
-            return {
-              ...row,
-              pattern_analysis: {
-                entropy: analysis.entropy,
-                patterns: analysis.patterns,
-                transitions: analysis.transitions
-              }
-            };
+    // Queue analysis jobs for sequences
+    const jobPromises = sequences.rows.map(async (row) => {
+      if (row.symbol_window?.length >= 3) {
+        const jobId = `analysis_${row.id}_${Date.now()}`;
+        await global.analysisQueue.queue.add('patternAnalysis', {
+          sequenceId: row.id,
+          symbols: row.symbol_window,
+          timestamp: row.created_at
+        }, {
+          jobId,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 2000
           }
-          return row;
-        }));
+        });
+        
+        return {
+          ...row,
+          analysis_job_id: jobId,
+          status: 'queued'
+        };
       }
-    );
+      return row;
+    });
+
+    const analyzedSequences = await Promise.all(jobPromises);
 
     return {
       sequences: analyzedSequences,
       metadata: {
-        analyzed_count: analyzedSequences.filter(s => s.pattern_analysis).length,
+        queued_count: analyzedSequences.filter(s => s.analysis_job_id).length,
         total_count: analyzedSequences.length
       }
     };
   }, { 
-    timeout: 30000, // 30s timeout for analysis
-    isolationLevel: 'READ COMMITTED' // Use lower isolation for read-only
+    timeout: 30000,
+    isolationLevel: 'READ COMMITTED'
   });
+
+  // Set up WebSocket subscription for analysis updates
+  if (global.wsManager) {
+    const channel = `analysis_updates_${uuidv4()}`;
+    global.wsManager.broadcast('analysis_subscription', {
+      channel,
+      sequences: result.sequences.map(s => s.analysis_job_id).filter(Boolean)
+    });
+  }
 
   res.json(result);
 }));
 
-// Add new sequence with immediate analysis
-router.post('/', errorBoundary(async (req, res) => {
+// Create new sequence
+router.post('/', validateSequence, errorBoundary(async (req, res) => {
   const { symbol } = req.body;
-  if (typeof symbol !== 'number' || symbol < 0 || symbol > 3) {
-    throw new AppError('Invalid symbol: must be number between 0 and 3', 400);
-  }
-
+  
   const result = await DatabaseManager.withTransaction(async (client) => {
-    // Insert new symbol
-    const result = await client.query(`
-      INSERT INTO sequences (symbol, created_at)
-      VALUES ($1, CURRENT_TIMESTAMP)
-      RETURNING id, symbol, created_at
-    `, [symbol]);
+    const insertResult = await client.query(
+      'INSERT INTO sequences (symbol, created_at) VALUES ($1, NOW()) RETURNING *',
+      [symbol]
+    );
+    
+    const newSequence = insertResult.rows[0];
+    
+    // Notify connected clients about new sequence
+    if (global.wsManager) {
+      global.wsManager.broadcast('new_sequence', {
+        id: newSequence.id,
+        symbol: newSequence.symbol,
+        created_at: newSequence.created_at
+      });
+    }
 
-    // Send immediate response
-    res.json({
-      message: 'Sequence added successfully',
-      sequence: {
-        id: result.rows[0].id,
-        symbol,
-        created_at: result.rows[0].created_at
-      }
-    });
+    // Queue immediate analysis if we have enough recent sequences
+    const recentSequences = await client.query(`
+      SELECT symbol 
+      FROM sequences 
+      WHERE created_at > NOW() - interval '1 minute'
+      ORDER BY created_at DESC 
+      LIMIT 10
+    `);
 
-    // Perform analysis asynchronously
-    const analyzeSequence = async () => {
-      const analysisClient = await DatabaseManager.getClient();
-      try {
-        // Get recent sequence window for analysis (increased to 1 hour)
-        const windowResult = await analysisClient.query(`
-          SELECT 
-            array_agg(symbol ORDER BY created_at) as symbols,
-            COUNT(*) as symbol_count,
-            MAX(created_at) as latest_created_at
-          FROM sequences
-          WHERE created_at > NOW() - interval '1 hour'
-          GROUP BY DATE_TRUNC('hour', created_at)
-          ORDER BY MAX(created_at) DESC
-        `);
-
-        if (!windowResult.rows[0]?.symbols || windowResult.rows[0].symbol_count < 2) {
-          logger.info('Not enough symbols for analysis yet');
-          return;
-        }
-
-        const symbols = windowResult.rows[0].symbols;
-        const analyzer = new PatternAnalyzer();
-        
-        // Initialize performance metrics if needed
-        await analysisClient.query(`
-          INSERT INTO model_performance (model_name, correct_predictions, total_predictions, last_updated)
-          SELECT m.name, 0, 0, CURRENT_TIMESTAMP
-          FROM (
-            VALUES ('markovChain'), ('entropy'), ('chiSquare'), ('monteCarlo'),
-                   ('arima'), ('lstm'), ('hmm'), ('rng')
-          ) AS m(name)
-          WHERE NOT EXISTS (
-            SELECT 1 FROM model_performance WHERE model_name = m.name
-          )
-        `);
-
-        const predictions = await analyzer.analyzeSequence(symbols);
-        
-        // Update model performance metrics
-        for (const [model, prediction] of Object.entries(predictions)) {
-          if (prediction && typeof prediction.confidence === 'number') {
-            await analysisClient.query(`
-              UPDATE model_performance 
-              SET 
-                total_predictions = total_predictions + 1,
-                correct_predictions = CASE 
-                  WHEN $1 = $2 THEN correct_predictions + 1 
-                  ELSE correct_predictions 
-                END,
-                last_updated = CURRENT_TIMESTAMP
-              WHERE model_name = $3
-            `, [prediction.prediction, symbol, model]);
+    if (recentSequences.rows.length >= 3) {
+      const symbols = recentSequences.rows.map(row => row.symbol);
+      const jobId = `analysis_${newSequence.id}_${Date.now()}`;
+      
+      if (global.analysisQueue) {
+        await global.analysisQueue.addJob({
+          sequenceId: newSequence.id,
+          symbols,
+          timestamp: newSequence.created_at
+        }, {
+          jobId,
+          priority: 1,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 1000
           }
-        }
-
-        logger.info('Sequence analysis completed successfully', {
-          symbolCount: symbols.length,
-          models: Object.keys(predictions)
         });
-      } catch (error) {
-        logger.error('Error in async sequence analysis:', error);
-      } finally {
-        analysisClient.release();
-      }
-    };
 
-    // Start analysis in background
-    analyzeSequence().catch(err => {
-      logger.error('Failed to start sequence analysis:', err);
-    });
+        newSequence.analysis_job_id = jobId;
+      }
+    }
+
+    return newSequence;
   });
+
+  res.status(201).json(result);
 }));
 
 // Undo last symbol
@@ -230,61 +203,45 @@ router.delete('/undo', errorBoundary(async (req, res) => {
 
 // Generate test data
 router.post('/generate', errorBoundary(async (req, res) => {
-  const { seedType = 'lcg', seedValue = Date.now(), length = 90 } = req.body;
+  const { count = 100, seed } = req.body;
   
-  if (!seedValue) {
-    throw new AppError('Missing required parameter: seedValue', 400);
+  if (!Number.isInteger(count) || count < 1 || count > 10000) {
+    throw new AppError('INVALID_COUNT', 'Count must be between 1 and 10000', 400);
   }
 
-  logger.info('[DB] Generating test data', { seedType, seedValue, length });
-
-  // Generate test data
-  const generator = new RNGGenerator(parseInt(seedValue));
-  generator.setType(seedType);
-  
-  const symbols = [];
-  for (let i = 0; i < length; i++) {
-    // Map the generated number to 0-3 range for symbols
-    symbols.push(generator.next() % 4);
-  }
-
-  // Batch insert all symbols
-  const values = symbols.map((symbol, index) => 
-    `($${index * 3 + 1}, $${index * 3 + 2}, $${index * 3 + 3}::jsonb)`
-  ).join(',');
-  
-  const params = symbols.reduce((params, val, index) => [
-    ...params,
-    val,
-    generator.uuid(),
-    JSON.stringify({
-      position: index + 1,
-      seedType,
-      seedValue,
-      generatedAt: new Date().toISOString()
-    })
-  ], []);
+  const generator = new RNGGenerator(seed);
+  const symbols = Array.from({ length: count }, () => generator.nextInt(0, 3));
 
   const result = await DatabaseManager.withTransaction(async (client) => {
-    const result = await client.query(`
-      INSERT INTO sequences (symbol, batch_id, metadata)
+    const values = symbols.map((symbol, index) => 
+      `($${index + 1}, NOW() + interval '${index} milliseconds')`
+    ).join(',');
+
+    const query = `
+      INSERT INTO sequences (symbol, created_at)
       VALUES ${values}
-      RETURNING id
-    `, params);
+      RETURNING id, symbol, created_at
+    `;
 
-    logger.info('[DB] Successfully inserted test data sequences', {
-      count: result.rowCount,
-      batchId: generator.uuid()
-    });
-
-    return {
-      message: 'Test data generated successfully',
-      count: result.rowCount,
-      batchId: generator.uuid(),
-      expectedLength: length
-    };
+    const insertResult = await client.query(query, symbols);
+    return insertResult.rows;
   });
-  res.json(result);
+
+  // Notify clients about new sequences
+  if (global.wsManager) {
+    result.forEach(sequence => {
+      global.wsManager.broadcast('new_sequence', {
+        id: sequence.id,
+        symbol: sequence.symbol,
+        created_at: sequence.created_at
+      });
+    });
+  }
+
+  res.status(201).json({
+    message: `Generated ${result.length} sequences`,
+    sequences: result
+  });
 }));
 
 // Analyze sequence and store predictions

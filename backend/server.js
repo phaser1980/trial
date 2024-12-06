@@ -3,9 +3,10 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const { exec } = require('child_process');
 const util = require('util');
-const sequencesRouter = require('./routes/sequences');
-const analysisRouter = require('./routes/analysis');
-const { initializeDatabase } = require('./initDb');
+const rateLimit = require('express-rate-limit');
+const WebSocketManager = require('./websocket/manager');
+const analysisQueue = require('./queues/analysisQueue');
+const logger = require('./utils/logger');
 
 const execAsync = util.promisify(exec);
 dotenv.config();
@@ -13,17 +14,38 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Rate limiting middleware
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: {
+    error: 'Too many requests from this IP, please try again later'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 app.use(cors());
 app.use(express.json());
+app.use(limiter);
 
 // Routes
-app.use('/api/sequences', sequencesRouter);
-app.use('/api/analysis', analysisRouter);
+app.use('/api/sequences', require('./routes/sequences'));
+app.use('/api/analysis', require('./routes/analysis'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send('Something broke!');
+  logger.error('Unhandled error:', {
+    error: err.message,
+    stack: err.stack
+  });
+  
+  res.status(500).json({
+    error: {
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred'
+    }
+  });
 });
 
 async function isPortInUse(port) {
@@ -31,7 +53,7 @@ async function isPortInUse(port) {
     const { stdout } = await execAsync('netstat -ano | findstr "LISTENING"');
     return stdout.includes(`:${port}`);
   } catch (error) {
-    console.error('Error checking port:', error.message);
+    logger.error('Error checking port:', error);
     return false;
   }
 }
@@ -46,64 +68,74 @@ async function killProcessOnPort(port) {
       const pid = match[1];
       try {
         await execAsync(`taskkill /F /PID ${pid}`);
-        console.log(`Killed process ${pid} on port ${port}`);
+        logger.info(`Killed process ${pid} on port ${port}`);
       } catch (err) {
         if (!err.message.includes('not found')) {
-          console.error(`Error killing process ${pid}:`, err.message);
+          logger.error(`Error killing process ${pid}:`, err);
         }
       }
     }
   } catch (error) {
-    console.error('Error killing process:', error.message);
+    logger.error('Error killing process:', error);
   }
 }
 
-// Function to start server with retries
 async function startServer(retries = 3) {
-  try {
-    // Initialize database before starting server
-    await initializeDatabase();
-    
-    for (let i = 0; i < retries; i++) {
-      try {
-        if (await isPortInUse(PORT)) {
-          console.log(`Port ${PORT} is in use. Attempting to free it...`);
-          await killProcessOnPort(PORT);
-          // Wait a bit for the port to be freed
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
-        const server = app.listen(PORT, () => {
-          console.log(`Server is running on port ${PORT}`);
-        });
-
-        // Handle graceful shutdown
-        const shutdown = async () => {
-          console.info('Shutdown signal received. Closing server...');
-          server.close(() => {
-            console.log('Server closed');
-            process.exit(0);
-          });
-        };
-
-        process.on('SIGTERM', shutdown);
-        process.on('SIGINT', shutdown);
-
-        // If we get here, server started successfully
-        return;
-      } catch (error) {
-        console.error(`Attempt ${i + 1} failed:`, error.message);
-        if (i === retries - 1) {
-          console.error(`Failed to start server after ${retries} attempts`);
-          process.exit(1);
-        }
-        // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, 2000));
+  let attempt = 0;
+  
+  while (attempt < retries) {
+    try {
+      const portInUse = await isPortInUse(PORT);
+      if (portInUse) {
+        logger.warn(`Port ${PORT} is in use, attempting to kill existing process`);
+        await killProcessOnPort(PORT);
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
+      
+      const server = app.listen(PORT, () => {
+        logger.info(`Server is running on port ${PORT}`);
+      });
+
+      // Initialize WebSocket manager
+      global.wsManager = new WebSocketManager(server);
+      logger.info('WebSocket server initialized');
+
+      // Initialize analysis queue
+      global.analysisQueue = analysisQueue;
+      logger.info('Analysis queue initialized');
+
+      // Graceful shutdown
+      process.on('SIGTERM', async () => {
+        logger.info('SIGTERM received, shutting down gracefully');
+        
+        // Close WebSocket connections
+        if (global.wsManager) {
+          global.wsManager.wss.close();
+        }
+        
+        // Close Bull queue
+        if (global.analysisQueue) {
+          await global.analysisQueue.queue.close();
+        }
+        
+        server.close(() => {
+          logger.info('Server closed');
+          process.exit(0);
+        });
+      });
+
+      return server;
+    } catch (error) {
+      attempt++;
+      logger.error(`Failed to start server (attempt ${attempt}/${retries}):`, error);
+      
+      if (attempt === retries) {
+        logger.error('Failed to start server after all retries');
+        process.exit(1);
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
-  } catch (error) {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
   }
 }
 

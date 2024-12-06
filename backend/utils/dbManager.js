@@ -1,100 +1,93 @@
-const { pool } = require('../initDb');
+const { Pool } = require('pg');
 const logger = require('./logger');
+require('dotenv').config();
 
 class DatabaseManager {
-  static async withTransaction(operations, options = {}) {
-    const {
-      timeout = 30000,  // 30 second default timeout
-      retries = 3,
-      isolationLevel = 'SERIALIZABLE'
-    } = options;
+  constructor() {
+    this.pool = new Pool({
+      connectionString: process.env.DATABASE_URL || 'postgresql://postgres:Redman1303!@localhost:5432/postgres',
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    });
 
-    const client = await pool.connect();
-    let attempt = 0;
-    
-    while (attempt < retries) {
-      try {
-        // Set statement timeout
-        await client.query(`SET statement_timeout = ${timeout}`);
-        await client.query(`BEGIN ISOLATION LEVEL ${isolationLevel}`);
-        
-        // Execute operations with timeout
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Transaction timeout')), timeout);
-        });
-        
-        const result = await Promise.race([
-          operations(client),
-          timeoutPromise
-        ]);
-        
-        await client.query('COMMIT');
-        return result;
-      } catch (error) {
-        attempt++;
-        await client.query('ROLLBACK').catch(rollbackError => {
-          logger.error('Rollback failed:', rollbackError);
-        });
-        
-        // Handle specific PostgreSQL errors
-        if (error.code === '40P01' && attempt < retries) { // Deadlock
-          logger.warn(`Deadlock detected, retry attempt ${attempt}/${retries}`);
-          await new Promise(r => setTimeout(r, Math.random() * 1000 * attempt));
-          continue;
+    this.pool.on('error', (err, client) => {
+      logger.error('Unexpected error on idle client', err);
+    });
+  }
+
+  async withTransaction(callback, options = {}) {
+    const client = await this.pool.connect();
+    let completed = false;
+
+    try {
+      await client.query('BEGIN');
+      
+      if (options.isolationLevel) {
+        await client.query(`SET TRANSACTION ISOLATION LEVEL ${options.isolationLevel}`);
+      }
+      
+      if (options.timeout) {
+        await client.query(`SET LOCAL statement_timeout = ${options.timeout}`);
+      }
+
+      const result = await callback(client);
+      await client.query('COMMIT');
+      completed = true;
+      return result;
+    } catch (e) {
+      if (!completed) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackError) {
+          logger.error('Error rolling back transaction:', rollbackError);
         }
-        
-        if (attempt === retries) {
-          logger.error('Transaction failed after retries:', {
-            error: error.message,
-            code: error.code,
-            stack: error.stack
-          });
-          throw error;
-        }
-      } finally {
+      }
+      throw e;
+    } finally {
+      if (!client.released) {
         client.release();
       }
     }
   }
 
-  static async query(text, params = [], options = {}) {
-    const client = await pool.connect();
-    try {
-      const start = Date.now();
-      const result = await client.query(text, params);
-      const duration = Date.now() - start;
-      
-      logger.debug('Query executed:', {
-        text,
-        duration,
-        rows: result.rowCount
-      });
-      
-      return result;
-    } catch (error) {
-      logger.error('Query error:', {
-        text,
-        error: error.message,
-        code: error.code
-      });
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  // Utility method for batch operations
-  static async withBatch(items, batchSize, operation) {
+  async withBatch(items, batchSize, callback) {
     const results = [];
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
-      const batchResults = await this.withTransaction(async (client) => {
-        return await operation(client, batch);
-      });
+      const batchResults = await callback(i, batch);
       results.push(...batchResults);
     }
     return results;
   }
+
+  async query(text, params = []) {
+    const start = Date.now();
+    try {
+      const res = await this.pool.query(text, params);
+      const duration = Date.now() - start;
+      logger.debug('Executed query', {
+        text,
+        duration,
+        rows: res.rowCount
+      });
+      return res;
+    } catch (err) {
+      logger.error('Query error', {
+        text,
+        error: err.message,
+        stack: err.stack
+      });
+      throw err;
+    }
+  }
+
+  async end() {
+    await this.pool.end();
+  }
 }
 
-module.exports = DatabaseManager;
+// Create singleton instance
+const dbManager = new DatabaseManager();
+
+module.exports = dbManager;
