@@ -70,73 +70,78 @@ class AnalysisQueue {
 
     async processFallback(job) {
         // Fallback processing when Redis isn't available
-        logger.warn('Processing job without Redis:', job.id);
-        const { sequence, metadata = {} } = job.data;
+        logger.info('Processing analysis job:', { jobId: job.id });
+        const { sequenceId, symbols, timestamp, metadata = {} } = job.data;
         
         try {
+            // Verify sequence exists first
+            const sequenceExists = await DatabaseManager.withTransaction(async (client) => {
+                const result = await client.query(
+                    'SELECT 1 FROM sequences WHERE id = $1',
+                    [sequenceId]
+                );
+                return result.rowCount > 0;
+            });
+
+            if (!sequenceExists) {
+                logger.error('Sequence not found:', { sequenceId });
+                throw new Error(`Sequence ${sequenceId} not found`);
+            }
+
             const analyzer = new PatternAnalyzer();
-            const analysis = await analyzer.analyzeSequence(sequence);
+            const analysis = await analyzer.analyzeSequence(symbols);
             
-            // Store results directly in database
-            const result = await DatabaseManager.withTransaction(async (client) => {
+            // Store results in database
+            await DatabaseManager.withTransaction(async (client) => {
                 // Store prediction
-                const predictionResult = await client.query(`
+                await client.query(`
                     INSERT INTO model_predictions (
                         sequence_id,
                         model_type,
                         prediction_data,
                         confidence_score,
-                        metadata
-                    ) VALUES ($1, $2, $3, $4, $5)
-                    RETURNING id
+                        metadata,
+                        created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (sequence_id, model_type) 
+                    DO UPDATE SET
+                        prediction_data = EXCLUDED.prediction_data,
+                        confidence_score = EXCLUDED.confidence_score,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = NOW()
                 `, [
-                    metadata.sequence_id || null,
+                    sequenceId,
                     'pattern_analysis',
                     JSON.stringify(analysis.patterns),
                     analysis.entropy,
                     JSON.stringify({
-                        ...metadata,
+                        timestamp,
                         transitions: analysis.transitions,
                         uniqueSymbols: analysis.metadata.uniqueSymbols,
-                        timestamp: new Date().toISOString()
-                    })
+                        ...metadata
+                    }),
+                    timestamp
                 ]);
 
-                // Store performance metrics if we have ground truth
-                if (metadata.actual_seed) {
-                    await client.query(`
-                        INSERT INTO model_performance (
-                            prediction_id,
-                            actual_value,
-                            predicted_value,
-                            error_metrics,
-                            metadata
-                        ) VALUES ($1, $2, $3, $4, $5)
-                    `, [
-                        predictionResult.rows[0].id,
-                        metadata.actual_seed,
-                        analysis.patterns[0]?.[0] || null,
-                        JSON.stringify({
-                            entropy: analysis.entropy,
-                            patternCount: analysis.patterns.length
-                        }),
-                        JSON.stringify({
-                            analysisTimestamp: new Date().toISOString(),
-                            modelType: 'pattern_analysis',
-                            sequenceLength: sequence.length
-                        })
-                    ]);
-                }
-
-                return {
-                    predictionId: predictionResult.rows[0].id,
-                    analysis: analysis
-                };
+                logger.info('Analysis stored successfully', { 
+                    jobId: job.id,
+                    sequenceId,
+                    type: 'pattern_analysis'
+                });
             });
 
-            return result;
+            return {
+                success: true,
+                sequenceId,
+                jobId: job.id,
+                analysisType: 'pattern_analysis'
+            };
         } catch (error) {
-            logger.error('Fallback processing failed:', error);
+            logger.error('Analysis failed:', { 
+                error: error.message,
+                jobId: job.id,
+                sequenceId
+            });
             throw error;
         }
     }

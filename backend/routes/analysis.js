@@ -1703,34 +1703,36 @@ router.post('/feedback', async (req, res) => {
 });
 
 // Get model performance metrics
-router.get('/performance', async (req, res) => {
-  const client = await db.getClient();
+router.get('/performance/:modelName', async (req, res) => {
+  const { modelName } = req.params;
+  
   try {
-    logger.debug('Fetching performance metrics');
-    const [overall, recent] = await Promise.all([
-      db.getModelPerformance(client, null, 100),  // Last 100 records
-      db.getModelAccuracy(client, null, '1 hour')  // Last hour
-    ]);
-    
-    logger.debug('Performance metrics retrieved', {
-      overallCount: overall.length,
-      recentCount: recent.length
+    const result = await DatabaseManager.withTransaction(async (client) => {
+      const { rows } = await client.query(`
+        SELECT *
+        FROM model_performance
+        WHERE model_type = $1
+        ORDER BY created_at DESC
+        LIMIT 1;
+      `, [modelName]);
+
+      return rows.length > 0 ? rows[0] : {
+        model_type: modelName,
+        correct_predictions: 0,
+        total_predictions: 0,
+        accuracy: 0,
+        created_at: new Date(),
+        metadata: {}
+      };
     });
-    
-    res.json({
-      overall_performance: overall,
-      recent_performance: recent,
-      timestamp: new Date()
-    });
-    
+
+    res.json(result);
   } catch (error) {
-    logger.error('Error fetching performance metrics', { error });
-    res.status(500).json({ 
-      error: 'Failed to fetch performance metrics',
-      details: error.message 
+    logger.error(`Error fetching performance metrics for ${modelName}:`, error);
+    res.status(500).json({
+      error: 'Failed to fetch model performance metrics',
+      details: error.message
     });
-  } finally {
-    client.release();
   }
 });
 

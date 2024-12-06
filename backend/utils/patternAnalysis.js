@@ -5,33 +5,86 @@ class PatternAnalyzer {
     this.transitionMatrix = Array(4).fill().map(() => Array(4).fill(0));
   }
 
+  // Main analysis method that combines all analysis types
+  async analyzeSequence(sequence) {
+    if (!Array.isArray(sequence)) {
+      throw new Error('Invalid sequence: must be an array');
+    }
+
+    if (sequence.length < 2) {
+      throw new Error('Invalid sequence: must have at least 2 elements');
+    }
+
+    if (!sequence.every(n => Number.isInteger(n) && n >= 0 && n < 4)) {
+      throw new Error('Invalid sequence: all elements must be integers between 0 and 3');
+    }
+
+    try {
+      const transitions = this.analyzeTransitions(sequence);
+      const entropy = this.calculateEntropy(sequence);
+      const patterns = this.detectPatterns(sequence);
+
+      return {
+        transitions,
+        entropy,
+        patterns: Array.from(patterns.entries()),
+        metadata: {
+          length: sequence.length,
+          uniqueSymbols: new Set(sequence).size,
+          timestamp: new Date()
+        }
+      };
+    } catch (error) {
+      logger.error('Error in pattern analysis:', error);
+      throw error;
+    }
+  }
+
   // Calculate transition probabilities
   analyzeTransitions(sequence) {
+    if (!Array.isArray(sequence) || sequence.length < 2) {
+      return Array(4).fill().map(() => Array(4).fill(0.25)); // Return uniform distribution
+    }
+
     // Reset matrix
     this.transitionMatrix = Array(4).fill().map(() => Array(4).fill(0));
     
-    // Count transitions
-    for (let i = 0; i < sequence.length - 1; i++) {
-      const current = sequence[i];
-      const next = sequence[i + 1];
-      this.transitionMatrix[current][next]++;
+    try {
+      // Count transitions
+      for (let i = 0; i < sequence.length - 1; i++) {
+        const current = sequence[i];
+        const next = sequence[i + 1];
+        
+        if (current >= 0 && current < 4 && next >= 0 && next < 4) {
+          this.transitionMatrix[current][next]++;
+        }
+      }
+      
+      // Convert to probabilities
+      const rowSums = this.transitionMatrix.map(row => 
+        row.reduce((sum, count) => sum + count, 0)
+      );
+      
+      return this.transitionMatrix.map((row, i) => 
+        row.map(count => rowSums[i] ? count / rowSums[i] : 0.25)
+      );
+    } catch (error) {
+      logger.error('Error in transition analysis:', error);
+      return Array(4).fill().map(() => Array(4).fill(0.25)); // Return uniform distribution on error
     }
-    
-    // Convert to probabilities
-    const rowSums = this.transitionMatrix.map(row => 
-      row.reduce((sum, count) => sum + count, 0)
-    );
-    
-    return this.transitionMatrix.map((row, i) => 
-      row.map(count => rowSums[i] ? count / rowSums[i] : 0)
-    );
   }
 
   // Calculate sequence entropy
   calculateEntropy(sequence) {
+    if (!Array.isArray(sequence) || sequence.length === 0) {
+      return 0;
+    }
+
     const frequencies = new Map();
     sequence.forEach(symbol => {
-      frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
+      if (symbol >= 0 && symbol < 4) {
+        frequencies.set(symbol, (frequencies.get(symbol) || 0) + 1);
+      }
     });
     
     return Array.from(frequencies.values()).reduce((entropy, freq) => {
@@ -42,20 +95,27 @@ class PatternAnalyzer {
 
   // Detect patterns using sliding window
   detectPatterns(sequence, windowSize = 3) {
+    if (!Array.isArray(sequence) || sequence.length < windowSize) {
+      return new Map();
+    }
+
     const patterns = new Map();
     
     for (let i = 0; i <= sequence.length - windowSize; i++) {
-      const pattern = sequence.slice(i, i + windowSize).join('');
-      patterns.set(pattern, (patterns.get(pattern) || 0) + 1);
+      const window = sequence.slice(i, i + windowSize);
+      if (window.every(n => n >= 0 && n < 4)) {
+        const pattern = window.join('');
+        patterns.set(pattern, (patterns.get(pattern) || 0) + 1);
+      }
     }
     
-    // Filter significant patterns (occurring more than random chance)
-    const expectedFreq = sequence.length / Math.pow(4, windowSize);
-    const significantPatterns = Array.from(patterns.entries())
-      .filter(([_, freq]) => freq > expectedFreq * 2)
-      .sort((a, b) => b[1] - a[1]);
+    // Convert counts to frequencies
+    const totalPatterns = Array.from(patterns.values()).reduce((sum, count) => sum + count, 0);
+    for (const [pattern, count] of patterns) {
+      patterns.set(pattern, count / totalPatterns);
+    }
     
-    return significantPatterns;
+    return patterns;
   }
 
   // Calculate similarity between sequences
@@ -73,29 +133,6 @@ class PatternAnalyzer {
     }
     
     return 1 / (1 + Math.sqrt(sumSquaredDiff));
-  }
-
-  // Main analysis function
-  async analyzeSequence(sequence) {
-    try {
-      const transitions = this.analyzeTransitions(sequence);
-      const entropy = this.calculateEntropy(sequence);
-      const patterns = this.detectPatterns(sequence);
-      
-      return {
-        transitions,
-        entropy,
-        patterns,
-        metadata: {
-          length: sequence.length,
-          uniqueSymbols: new Set(sequence).size,
-          timestamp: new Date()
-        }
-      };
-    } catch (error) {
-      logger.error('Error in pattern analysis:', error);
-      throw error;
-    }
   }
 }
 

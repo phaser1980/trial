@@ -1,280 +1,262 @@
 const express = require('express');
 const router = express.Router();
-const DatabaseManager = require('../utils/dbManager');
+const { Sequence, SequenceAnalytics } = require('../models');
 const logger = require('../utils/logger');
-const PatternAnalyzer = require('../utils/patternAnalysis');
-const RNGGenerator = require('../utils/rngGenerators');
+const Redis = require('ioredis');
 const { errorBoundary, validateSequence, AppError } = require('../middleware/errorBoundary');
 const { v4: uuidv4 } = require('uuid');
+const { Op } = require('sequelize');
+const RNGGenerator = require('../utils/RNGGenerator');
+
+// Initialize Redis client
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+const CACHE_TTL = 300; // 5 minutes
 
 // Check table structure (for debugging only)
 router.get('/debug/schema', errorBoundary(async (req, res) => {
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    const result = await client.query(`
-      SELECT column_name, data_type, column_default
-      FROM information_schema.columns
-      WHERE table_name = 'sequences'
-      ORDER BY ordinal_position;
-    `);
-    logger.info('[DB] Retrieved schema information', { columns: result.rows });
-    return result.rows;
-  });
-  res.json(result);
+  const result = await Sequence.sequelize.query(`
+    SELECT column_name, data_type, column_default
+    FROM information_schema.columns
+    WHERE table_name = 'sequences'
+    ORDER BY ordinal_position;
+  `);
+  logger.info('[DB] Retrieved schema information', { columns: result[0] });
+  res.json(result[0]);
+}));
+
+// Get analytics from materialized view with Redis caching
+router.get('/analytics', errorBoundary(async (req, res) => {
+  try {
+    // Always return an array, even if empty
+    let analytics = [];
+    
+    try {
+      const rawAnalytics = await SequenceAnalytics.findAll({
+        order: [['time_bucket', 'DESC']],
+        limit: 24,
+        raw: true
+      });
+
+      if (Array.isArray(rawAnalytics)) {
+        analytics = rawAnalytics.map(row => ({
+          id: row?.id || '',
+          time_bucket: row?.time_bucket || new Date().toISOString(),
+          sequence_count: row?.sequence_count ? Number(row.sequence_count) : null,
+          avg_entropy: row?.avg_entropy ? Number(row.avg_entropy) : null,
+          pattern_distribution: {
+            detected: row?.pattern_distribution?.detected ? Number(row.pattern_distribution.detected) : null,
+            not_detected: row?.pattern_distribution?.not_detected ? Number(row.pattern_distribution.not_detected) : null
+          },
+          unique_batches: row?.unique_batches ? Number(row.unique_batches) : null,
+          avg_confidence: row?.avg_confidence ? Number(row.avg_confidence) : null,
+          unique_seeds: row?.unique_seeds ? Number(row.unique_seeds) : null
+        }));
+      }
+    } catch (dbError) {
+      logger.error('[Analytics] Database error:', dbError);
+    }
+
+    return res.json({ 
+      sequences: analytics.map(row => ({
+        ...row,
+        // Only convert to number if value exists, otherwise keep as null
+        avg_entropy: row.avg_entropy !== null ? Number(row.avg_entropy) : null,
+        avg_confidence: row.avg_confidence !== null ? Number(row.avg_confidence) : null
+      }))
+    });
+    
+  } catch (error) {
+    logger.error('[Analytics] Error:', error);
+    return res.json({ sequences: [] });
+  }
 }));
 
 // Get all sequences
 router.get('/', errorBoundary(async (req, res) => {
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    logger.info('[DB] Fetching all sequences');
-    const queryResult = await client.query(
-      'SELECT symbol, created_at FROM sequences ORDER BY created_at ASC'
-    );
-    
-    return queryResult.rows.map(row => ({
-      symbol: row.symbol,
-      created_at: row.created_at.toISOString()
-    }));
-  }, { timeout: 15000 }); // 15s timeout for large queries
-  
-  res.json({ sequence: result });
+  try {
+    const result = await Sequence.findAll({
+      attributes: ['symbol', 'created_at'],
+      order: [['created_at', 'ASC']]
+    }) || [];
+
+    res.json({ 
+      sequences: result.map(row => ({
+        symbol: row.symbol,
+        created_at: row.created_at.toISOString()
+      }))
+    });
+  } catch (error) {
+    logger.error('[Sequences] Error:', error);
+    res.json({ sequences: [] });
+  }
 }));
 
 // Get recent sequences with pattern analysis
 router.get('/recent', errorBoundary(async (req, res) => {
-  const { limit = 100 } = req.query;
-  
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    const sequences = await client.query(`
-      SELECT s.*, 
-             array_agg(s2.symbol) OVER (
-               PARTITION BY (s.created_at::date) 
-               ORDER BY s.created_at 
-               ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
-             ) as symbol_window
-      FROM sequences s
-      LEFT JOIN sequences s2 
-        ON s2.created_at <= s.created_at 
-        AND s2.created_at > s.created_at - interval '1 minute'
-      WHERE s.created_at > NOW() - interval '1 hour'
-      ORDER BY s.created_at DESC
-      LIMIT $1
-    `, [limit]);
+  try {
+    const { limit = 100 } = req.query;
+    const sequences = await Sequence.findAll({
+      where: {
+        created_at: {
+          [Op.gt]: new Date(Date.now() - 60 * 60 * 1000)
+        }
+      },
+      order: [['created_at', 'DESC']],
+      limit: parseInt(limit),
+      attributes: [
+        'id', 'symbol', 'created_at', 'entropy_value',
+        'pattern_detected', 'pattern_strength', 'metadata'
+      ]
+    }) || [];
 
-    // Queue analysis jobs for sequences
-    const jobPromises = sequences.rows.map(async (row) => {
-      if (row.symbol_window?.length >= 3) {
-        const jobId = `analysis_${row.id}_${Date.now()}`;
-        await global.analysisQueue.queue.add('patternAnalysis', {
-          sequenceId: row.id,
-          symbols: row.symbol_window,
-          timestamp: row.created_at
-        }, {
-          jobId,
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 2000
-          }
-        });
-        
-        return {
-          ...row,
-          analysis_job_id: jobId,
-          status: 'queued'
-        };
-      }
-      return row;
-    });
-
-    const analyzedSequences = await Promise.all(jobPromises);
-
-    return {
-      sequences: analyzedSequences,
-      metadata: {
-        queued_count: analyzedSequences.filter(s => s.analysis_job_id).length,
-        total_count: analyzedSequences.length
-      }
-    };
-  }, { 
-    timeout: 30000,
-    isolationLevel: 'READ COMMITTED'
-  });
-
-  // Set up WebSocket subscription for analysis updates
-  if (global.wsManager) {
-    const channel = `analysis_updates_${uuidv4()}`;
-    global.wsManager.broadcast('analysis_subscription', {
-      channel,
-      sequences: result.sequences.map(s => s.analysis_job_id).filter(Boolean)
-    });
+    res.json({ sequences });
+  } catch (error) {
+    logger.error('[Recent Sequences] Error:', error);
+    res.json({ sequences: [] });
   }
-
-  res.json(result);
 }));
 
 // Create new sequence
 router.post('/', validateSequence, errorBoundary(async (req, res) => {
-  const { symbol } = req.body;
-  
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    const insertResult = await client.query(
-      'INSERT INTO sequences (symbol, created_at) VALUES ($1, NOW()) RETURNING *',
-      [symbol]
-    );
-    
-    const newSequence = insertResult.rows[0];
-    
-    // Notify connected clients about new sequence
-    if (global.wsManager) {
-      global.wsManager.broadcast('new_sequence', {
-        id: newSequence.id,
-        symbol: newSequence.symbol,
-        created_at: newSequence.created_at
-      });
-    }
+  const { symbol, metadata = {} } = req.body;
+  const batchId = req.body.batch_id || uuidv4();
 
-    // Queue immediate analysis if we have enough recent sequences
-    const recentSequences = await client.query(`
-      SELECT symbol 
-      FROM sequences 
-      WHERE created_at > NOW() - interval '1 minute'
-      ORDER BY created_at DESC 
-      LIMIT 10
-    `);
-
-    if (recentSequences.rows.length >= 3) {
-      const symbols = recentSequences.rows.map(row => row.symbol);
-      const jobId = `analysis_${newSequence.id}_${Date.now()}`;
-      
-      if (global.analysisQueue) {
-        await global.analysisQueue.addJob({
-          sequenceId: newSequence.id,
-          symbols,
-          timestamp: newSequence.created_at
-        }, {
-          jobId,
-          priority: 1,
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 1000
-          }
-        });
-
-        newSequence.analysis_job_id = jobId;
-      }
-    }
-
-    return newSequence;
+  const sequence = await Sequence.create({
+    symbol,
+    batch_id: batchId,
+    metadata
   });
 
-  res.status(201).json(result);
+  // Trigger materialized view refresh if needed
+  await SequenceAnalytics.sequelize.query('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_sequence_analytics');
+  
+  res.status(201).json({ sequences: [sequence] });
 }));
 
-// Undo last symbol
-router.delete('/undo', errorBoundary(async (req, res) => {
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    // Get the last symbol before deleting
-    const lastSymbol = await client.query(
-      'SELECT * FROM sequences ORDER BY created_at DESC LIMIT 1'
-    );
-    
-    console.log('[DB] Attempting to undo last symbol:', lastSymbol.rows[0]);
-    
-    await client.query(
-      'DELETE FROM sequences WHERE id = (SELECT id FROM sequences ORDER BY created_at DESC LIMIT 1)'
-    );
-    
-    // Verify deletion
-    const verification = await client.query(
-      'SELECT COUNT(*) FROM sequences'
-    );
-    
-    console.log('[DB] Sequences after undo:', verification.rows[0].count);
-    
-    return { 
-      success: true,
-      removed: lastSymbol.rows[0],
-      remaining: verification.rows[0].count
-    };
+// Batch create sequences
+router.post('/batch', errorBoundary(async (req, res) => {
+  const { sequences } = req.body;
+  if (!Array.isArray(sequences)) {
+    throw new AppError('Sequences must be an array', 400);
+  }
+
+  const batchId = uuidv4();
+  const sequenceRecords = sequences.map(seq => ({
+    ...seq,
+    batch_id: batchId
+  }));
+
+  const created = await Sequence.bulkCreate(sequenceRecords);
+
+  // Trigger materialized view refresh
+  await SequenceAnalytics.sequelize.query('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_sequence_analytics');
+
+  res.status(201).json({
+    count: created.length,
+    batch_id: batchId,
+    sequences: created
   });
-  res.json(result);
+}));
+
+// Delete last sequence (for undo functionality)
+router.delete('/undo', errorBoundary(async (req, res) => {
+  const lastSequence = await Sequence.findOne({
+    order: [['created_at', 'DESC']]
+  });
+
+  if (!lastSequence) {
+    throw new AppError('No sequences to undo', 404);
+  }
+
+  await lastSequence.destroy();
+  
+  // Trigger materialized view refresh
+  await SequenceAnalytics.sequelize.query('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_sequence_analytics');
+
+  res.json({ sequences: [] });
 }));
 
 // Generate test data
 router.post('/generate', errorBoundary(async (req, res) => {
-  const { count = 100, seed = Date.now() } = req.body;
+  const { count = 100, seed = Date.now(), algorithm = 'LCG' } = req.body;
+  const batchId = req.body.batchId || uuidv4();
   
   if (!Number.isInteger(count) || count < 1 || count > 10000) {
     throw new AppError('INVALID_COUNT', 'Count must be between 1 and 10000', 400);
   }
 
-  const generator = new RNGGenerator(seed);
-  const symbols = Array.from({ length: count }, () => Math.floor(generator.next() % 4));
+  try {
+    const rng = new RNGGenerator(seed, algorithm);
+    const sequence = rng.generateSequence(count);
 
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    const values = symbols.map((symbol, index) => 
-      `($${index + 1}, NOW() + interval '${index} milliseconds')`
-    ).join(',');
+    const sequenceRecords = sequence.map(symbol => ({
+      symbol,
+      batch_id: batchId,
+      metadata: {
+        seed,
+        algorithm,
+        timestamp: new Date().toISOString()
+      }
+    }));
 
-    const query = `
-      INSERT INTO sequences (symbol, created_at)
-      VALUES ${values}
-      RETURNING id, symbol, created_at
-    `;
+    const created = await Sequence.bulkCreate(sequenceRecords);
 
-    const insertResult = await client.query(query, symbols);
-    return insertResult.rows;
+    // Trigger materialized view refresh
+    await SequenceAnalytics.sequelize.query('SELECT refresh_sequence_analytics()');
+
+    res.status(201).json({
+      sequences: created,
+      metadata: {
+        batch_id: batchId,
+        seed,
+        algorithm,
+        count: created.length
+      }
+    });
+
+  } catch (error) {
+    logger.error('[Generate] Error:', error);
+    throw new AppError('GENERATION_ERROR', 'Failed to generate sequence: ' + error.message, 500);
+  }
+}));
+
+// Analyze patterns in a sequence batch
+router.post('/analyze', errorBoundary(async (req, res) => {
+  const { batchId } = req.body;
+  if (!batchId) {
+    throw new AppError('Batch ID is required', 400);
+  }
+
+  const result = await Sequence.findAll({
+    where: {
+      batch_id: batchId
+    },
+    attributes: ['symbol', 'created_at']
   });
 
-  // Notify clients about new sequences
-  if (global.wsManager) {
-    result.forEach(sequence => {
-      global.wsManager.broadcast('new_sequence', {
-        id: sequence.id,
-        symbol: sequence.symbol,
-        created_at: sequence.created_at
-      });
-    });
-  }
+  // Use database functions for analysis
+  const analysis = await Sequence.sequelize.query(`
+    WITH batch_symbols AS (
+      SELECT array_agg(symbol ORDER BY created_at) as symbols
+      FROM sequences
+      WHERE batch_id = $1
+    )
+    SELECT 
+      match_rng_pattern(symbols, 'LCG') as lcg_analysis,
+      match_rng_pattern(symbols, 'XORShift') as xorshift_analysis,
+      match_rng_pattern(symbols, 'MSWS') as msws_analysis
+    FROM batch_symbols
+  `, [batchId]);
 
-  // Queue analysis for the new batch
-  if (global.analysisQueue && result.length >= 3) {
-    const symbols = result.map(row => row.symbol);
-    const jobId = `analysis_batch_${Date.now()}`;
-    
-    try {
-      await global.analysisQueue.addJob({
-        sequenceId: result[0].id,
-        symbols,
-        timestamp: result[0].created_at,
-        metadata: {
-          batchSize: result.length,
-          seed
-        }
-      }, {
-        jobId,
-        priority: 2,
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 1000
-        }
-      });
-    } catch (error) {
-      logger.warn('Failed to queue analysis job:', error);
-      // Continue without analysis
-    }
-  }
-
-  res.status(201).json({
-    message: `Generated ${result.length} sequences`,
-    sequences: result
+  return res.json({ 
+    sequences: result,
+    analysis: analysis[0][0],
+    timestamp: new Date()
   });
 }));
 
 // Analyze sequence and store predictions
-router.post('/analyze', errorBoundary(async (req, res) => {
+router.post('/analyze-sequence', errorBoundary(async (req, res) => {
   const { sequence, metadata = {} } = req.body;
   if (!Array.isArray(sequence)) {
     throw new AppError('Sequence must be an array of numbers', 400);
@@ -285,32 +267,20 @@ router.post('/analyze', errorBoundary(async (req, res) => {
   
   // Store analysis results
   // Store in model_predictions
-  const predictionResult = await DatabaseManager.withTransaction(async (client) => {
-    const result = await client.query(`
-      INSERT INTO model_predictions (
-        sequence_id,
-        model_type,
-        prediction_data,
-        confidence_score,
-        metadata
-      ) VALUES ($1, $2, $3, $4, $5)
-      RETURNING id
-    `, [
-      metadata.sequence_id || null,
-      'pattern_analysis',
-      JSON.stringify(analysis.patterns),
-      analysis.entropy, // Using entropy as confidence score
-      JSON.stringify({
+  const predictionResult = await Sequence.sequelize.transaction(async (transaction) => {
+    const result = await Sequence.create({
+      symbol: sequence[0],
+      metadata: {
         ...metadata,
         transitions: analysis.transitions,
         uniqueSymbols: analysis.metadata.uniqueSymbols,
         timestamp: analysis.metadata.timestamp
-      })
-    ]);
+      }
+    }, { transaction });
 
     // Update model_performance if we have ground truth
     if (metadata.actual_seed) {
-      await client.query(`
+      await Sequence.sequelize.query(`
         INSERT INTO model_performance (
           prediction_id,
           actual_value,
@@ -319,7 +289,7 @@ router.post('/analyze', errorBoundary(async (req, res) => {
           metadata
         ) VALUES ($1, $2, $3, $4, $5)
       `, [
-        result.rows[0].id,
+        result.id,
         metadata.actual_seed,
         analysis.patterns[0]?.[0] || null, // Most significant pattern
         JSON.stringify({
@@ -331,16 +301,16 @@ router.post('/analyze', errorBoundary(async (req, res) => {
           modelType: 'pattern_analysis',
           sequenceLength: sequence.length
         })
-      ]);
+      ], { transaction });
     }
 
     return {
       message: 'Analysis complete',
       results: analysis,
-      predictionId: result.rows[0].id
+      predictionId: result.id
     };
   });
-  res.json(predictionResult);
+  res.json({ sequences: [predictionResult] });
 }));
 
 // Analyze sequences for RNG seed discovery
@@ -348,22 +318,20 @@ router.post('/discover-seed', errorBoundary(async (req, res) => {
   const { windowSize = 100, minConfidence = 0.7 } = req.body;
   const analyzer = new PatternAnalyzer();
 
-  const result = await DatabaseManager.withTransaction(async (client) => {
+  const result = await Sequence.sequelize.transaction(async (transaction) => {
     // Get recent sequences for analysis
-    const sequencesResult = await client.query(`
-      SELECT array_agg(symbol ORDER BY created_at) as symbols,
-             MAX(entropy_value) as max_entropy,
-             bool_or(pattern_detected) as has_patterns
-      FROM (
-        SELECT *
-        FROM sequences
-        WHERE created_at > NOW() - interval '1 hour'
-        ORDER BY created_at DESC
-        LIMIT $1
-      ) recent
-    `, [windowSize]);
+    const sequencesResult = await Sequence.findAll({
+      where: {
+        created_at: {
+          [Op.gt]: new Date(Date.now() - 60 * 60 * 1000) // last hour
+        }
+      },
+      order: [['created_at', 'DESC']],
+      limit: windowSize,
+      attributes: ['symbol']
+    }, { transaction });
 
-    const sequence = sequencesResult.rows[0]?.symbols || [];
+    const sequence = sequencesResult.map(row => row.symbol);
     if (sequence.length < windowSize) {
       throw new AppError('Insufficient sequence data for analysis', 400);
     }
@@ -404,28 +372,19 @@ router.post('/discover-seed', errorBoundary(async (req, res) => {
 
     // Store predictions in model_predictions table
     for (const candidate of topCandidates) {
-      await client.query(`
-        INSERT INTO model_predictions (
-          model_type,
-          prediction_data,
-          confidence_score,
-          metadata
-        ) VALUES ($1, $2, $3, $4)
-      `, [
-        'rng_seed_discovery',
-        JSON.stringify({
+      await Sequence.create({
+        symbol: sequence[0],
+        metadata: {
           seed: candidate.seed,
-          rngType: candidate.rngType
-        }),
-        candidate.confidence,
-        JSON.stringify({
-          analysis_timestamp: new Date(),
-          window_size: windowSize,
-          matched_patterns: candidate.matchedPatterns,
+          rngType: candidate.rngType,
+          confidence: candidate.confidence,
+          matchedPatterns: candidate.matchedPatterns,
+          analysisTimestamp: new Date(),
+          windowSize,
           entropy: analysis.entropy,
-          sequence_patterns: analysis.patterns
-        })
-      ]);
+          sequencePatterns: analysis.patterns
+        }
+      }, { transaction });
     }
 
     return {
@@ -438,50 +397,56 @@ router.post('/discover-seed', errorBoundary(async (req, res) => {
       }
     };
   });
-  res.json(result);
+  res.json({ sequences: [] });
 }));
 
-// Reset database
+// Reset game state
 router.post('/reset', errorBoundary(async (req, res) => {
-  const result = await DatabaseManager.withTransaction(async (client) => {
-    logger.info('[DB] Starting database reset');
-    
-    // Get counts before reset
-    const beforeCounts = await client.query(`
-      SELECT 
-        (SELECT COUNT(*) FROM sequences) as sequences_count,
-        (SELECT COUNT(*) FROM model_predictions) as predictions_count,
-        (SELECT COUNT(*) FROM model_performance) as performance_count
-    `);
-    
-    logger.info('[DB] Counts before reset:', beforeCounts.rows[0]);
-    
-    // Truncate all related tables in the correct order
-    await client.query(`
-      TRUNCATE TABLE 
-        model_predictions,
-        model_performance,
-        sequences
-      CASCADE
-    `);
-    
-    // Verify reset
-    const afterCounts = await client.query(`
-      SELECT 
-        (SELECT COUNT(*) FROM sequences) as sequences_count,
-        (SELECT COUNT(*) FROM model_predictions) as predictions_count,
-        (SELECT COUNT(*) FROM model_performance) as performance_count
-    `);
-    
-    logger.info('[DB] Counts after reset:', afterCounts.rows[0]);
-    
-    return { 
-      message: 'Database reset successfully',
-      before: beforeCounts.rows[0],
-      after: afterCounts.rows[0]
-    };
-  });
-  res.json(result);
+  const lockKey = 'reset_lock';
+  try {
+    // Check if reset is already in progress
+    const lockExists = await redis.get(lockKey);
+    if (lockExists) {
+      logger.warn('[Reset] Reset already in progress, skipping');
+      return res.status(409).json({ message: 'Reset already in progress' });
+    }
+
+    // Set lock with 30s timeout
+    await redis.set(lockKey, '1', 'EX', 30);
+
+    await Sequence.sequelize.transaction(async (transaction) => {
+      // Clear sequences in batches
+      let deleted;
+      do {
+        deleted = await Sequence.destroy({
+          where: {},
+          limit: 1000,
+          cascade: true,
+          transaction
+        });
+        logger.info(`[Reset] Deleted ${deleted} sequences`);
+      } while (deleted > 0);
+
+      // Refresh analytics once after all deletions
+      await SequenceAnalytics.sequelize.query('SELECT refresh_sequence_analytics()');
+    });
+
+    // Clear Redis cache with timeout protection
+    const redisFlushPromise = redis.flushall();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Redis flush timed out")), 5000)
+    );
+    await Promise.race([redisFlushPromise, timeoutPromise]);
+
+    logger.info('[Reset] Game state reset successfully');
+    res.json({ message: 'Game state reset successfully', sequences: [] });
+  } catch (error) {
+    logger.error('[Reset] Error:', error);
+    throw new AppError('RESET_ERROR', 'Failed to reset game state: ' + error.message, 500);
+  } finally {
+    // Always clear the lock
+    await redis.del(lockKey);
+  }
 }));
 
 module.exports = router;
