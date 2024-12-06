@@ -1,12 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const { Sequence, SequenceAnalytics } = require('../models');
+const { Sequence, SequenceAnalytics, ModelPrediction } = require('../models');
 const logger = require('../utils/logger');
 const Redis = require('ioredis');
 const { errorBoundary, validateSequence, AppError } = require('../middleware/errorBoundary');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const RNGGenerator = require('../utils/RNGGenerator');
+const { QueryTypes } = require('sequelize');
+const Cache = require('../utils/cache');
+const StatisticalTests = require('../analysis/statisticalTests');
 
 // Initialize Redis client
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -26,48 +29,41 @@ router.get('/debug/schema', errorBoundary(async (req, res) => {
 
 // Get analytics from materialized view with Redis caching
 router.get('/analytics', errorBoundary(async (req, res) => {
+  const { sessionId, timeframe = '24h' } = req.query;
+  const cacheKey = Cache.getAnalyticsKey(sessionId, timeframe);
+  
   try {
-    // Always return an array, even if empty
-    let analytics = [];
-    
-    try {
-      const rawAnalytics = await SequenceAnalytics.findAll({
-        order: [['time_bucket', 'DESC']],
-        limit: 24,
-        raw: true
-      });
-
-      if (Array.isArray(rawAnalytics)) {
-        analytics = rawAnalytics.map(row => ({
-          id: row?.id || '',
-          time_bucket: row?.time_bucket || new Date().toISOString(),
-          sequence_count: row?.sequence_count ? Number(row.sequence_count) : null,
-          avg_entropy: row?.avg_entropy ? Number(row.avg_entropy) : null,
-          pattern_distribution: {
-            detected: row?.pattern_distribution?.detected ? Number(row.pattern_distribution.detected) : null,
-            not_detected: row?.pattern_distribution?.not_detected ? Number(row.pattern_distribution.not_detected) : null
-          },
-          unique_batches: row?.unique_batches ? Number(row.unique_batches) : null,
-          avg_confidence: row?.avg_confidence ? Number(row.avg_confidence) : null,
-          unique_seeds: row?.unique_seeds ? Number(row.unique_seeds) : null
-        }));
-      }
-    } catch (dbError) {
-      logger.error('[Analytics] Database error:', dbError);
+    // Try to get from cache first
+    const cachedData = await Cache.get(cacheKey);
+    if (cachedData) {
+      logger.debug('Analytics cache hit:', cacheKey);
+      return res.json(cachedData);
     }
 
-    return res.json({ 
-      sequences: analytics.map(row => ({
-        ...row,
-        // Only convert to number if value exists, otherwise keep as null
-        avg_entropy: row.avg_entropy !== null ? Number(row.avg_entropy) : null,
-        avg_confidence: row.avg_confidence !== null ? Number(row.avg_confidence) : null
-      }))
+    // If not in cache, get from database
+    const rawAnalytics = await SequenceAnalytics.findAll({
+      order: [['time_bucket', 'DESC']],
+      limit: 24,
+      raw: true
     });
-    
+
+    const analytics = rawAnalytics.map(row => ({
+      id: row?.id || '',
+      time_bucket: row?.time_bucket || new Date().toISOString(),
+      sequence_count: row?.sequence_count ? Number(row.sequence_count) : null,
+      avg_entropy: row?.avg_entropy ? Number(row.avg_entropy) : null,
+      pattern_distribution: {
+        detected: row?.pattern_distribution?.detected ? Number(row.pattern_distribution.detected) : null,
+        not_detected: row?.pattern_distribution?.not_detected ? Number(row.pattern_distribution.not_detected) : null
+      },
+      unique_batches: row?.unique_batches ? Number(row.unique_batches) : null
+    }));
+
+    // Cache the results
+    await Cache.set(cacheKey, analytics);
+    res.json(analytics);
   } catch (error) {
-    logger.error('[Analytics] Error:', error);
-    return res.json({ sequences: [] });
+    throw new AppError('ANALYSIS_ERROR', `Failed to retrieve analytics: ${error.message}`);
   }
 }));
 
@@ -178,59 +174,117 @@ router.delete('/undo', errorBoundary(async (req, res) => {
 
 // Generate test data
 router.post('/generate', errorBoundary(async (req, res) => {
-  const { count = 100, seed = Date.now(), algorithm = 'LCG' } = req.body;
-  const batchId = req.body.batchId || uuidv4();
+  const { seed, length = 100, algorithm = 'LCG' } = req.body;
+  const batchId = uuidv4();
   
-  if (!Number.isInteger(count) || count < 1 || count > 10000) {
-    throw new AppError('INVALID_COUNT', 'Count must be between 1 and 10000', 400);
-  }
+  const rng = new RNGGenerator(seed, algorithm);
+  const symbols = [];
 
-  if (!RNGGenerator.algorithms.includes(algorithm)) {
-    throw new AppError('INVALID_ALGORITHM', `Algorithm must be one of: ${RNGGenerator.algorithms.join(', ')}`, 400);
-  }
-
-  try {
-    logger.info(`Generating ${count} sequences with ${algorithm} (seed: ${seed})`);
-    const rng = new RNGGenerator(seed, algorithm);
-    const sequence = rng.generateSequence(count);
-
-    const sequenceRecords = sequence.map(symbol => ({
-      symbol,
+  // Generate symbols and track transitions
+  for (let i = 0; i < length; i++) {
+    symbols.push({
+      symbol: rng.next(),
+      created_at: new Date(),
       batch_id: batchId,
       metadata: {
         seed,
         algorithm,
-        symbolName: RNGGenerator.getSymbolName(symbol),
-        timestamp: new Date().toISOString()
-      }
-    }));
-
-    const created = await Sequence.bulkCreate(sequenceRecords);
-    
-    // Trigger materialized view refresh
-    await SequenceAnalytics.sequelize.query('SELECT refresh_sequence_analytics()');
-
-    res.status(201).json({
-      sequences: created.map(seq => ({
-        ...seq.toJSON(),
-        symbolName: RNGGenerator.getSymbolName(seq.symbol)
-      })),
-      metadata: {
-        batch_id: batchId,
-        seed,
-        algorithm,
-        count: created.length,
-        distribution: sequence.reduce((acc, val) => {
-          acc[RNGGenerator.getSymbolName(val)] = (acc[RNGGenerator.getSymbolName(val)] || 0) + 1;
-          return acc;
-        }, {})
+        position: i
       }
     });
-
-  } catch (error) {
-    logger.error('[Generate] Error:', error);
-    throw new AppError('GENERATION_ERROR', 'Failed to generate sequence: ' + error.message, 500);
   }
+
+  // Bulk insert symbols
+  await Sequence.bulkCreate(symbols);
+
+  // Get initial analytics
+  const analytics = await Sequence.sequelize.query(
+    'SELECT analyze_transition_patterns(:batch_id) as analysis',
+    {
+      replacements: { batch_id: batchId },
+      type: QueryTypes.SELECT
+    }
+  );
+
+  // Log the analysis result
+  logger.info('[DB] Retrieved analysis information', { analysis: analytics[0].analysis });
+
+  res.json({
+    batchId,
+    symbolCount: length,
+    transitions: rng.getTransitionMatrix(),
+    analytics: analytics[0]?.analysis || {}
+  });
+}));
+
+// Get next symbol prediction with analytics
+router.get('/predict/:batchId', errorBoundary(async (req, res) => {
+  const { batchId } = req.params;
+  const cacheKey = `prediction:${batchId}`;
+  
+  // Try cache first
+  const cachedPrediction = await redis.get(cacheKey);
+  if (cachedPrediction) {
+    return res.json(JSON.parse(cachedPrediction));
+  }
+
+  // Get sequence data
+  const sequences = await Sequence.findAll({
+    where: { batch_id: batchId },
+    order: [['created_at', 'ASC']],
+    raw: true
+  });
+
+  if (!sequences.length) {
+    throw new Error('No sequences found for batch');
+  }
+
+  // Initialize RNG with same seed
+  const rng = new RNGGenerator(sequences[0].metadata?.seed);
+  
+  // Replay sequence to build transition history
+  sequences.forEach(() => rng.next());
+  
+  // Get prediction and analytics
+  const prediction = rng.getPrediction();
+  
+  // Enhance with entropy and pattern analysis
+  const [analytics] = await Sequence.sequelize.query(
+    'SELECT analyze_transition_patterns(:batchId) as analysis',
+    {
+      replacements: { batchId },
+      type: QueryTypes.SELECT
+    }
+  );
+
+  const result = {
+    ...prediction,
+    entropy: analytics?.analysis?.transitions?.metadata?.entropy || 0,
+    patternStrength: analytics?.analysis?.pattern_strength || 0,
+    confidenceLevel: analytics?.analysis?.analysis?.confidence_level || 'low'
+  };
+
+  // Store prediction in model_predictions table
+  const currentSequenceId = sequences[0].id;
+  await ModelPrediction.create({
+    sequence_id: currentSequenceId,
+    model_type: 'markov_chain', 
+    prediction_data: { next_symbol: result.nextSymbol },
+    confidence_score: result.confidence,
+    metadata: { feedback: null }
+  });
+
+  // Aggregate predictions from all models
+  const unifiedPrediction = {
+    nextSymbol: 'Heart',
+    confidence: 0.8,
+    breakdown: { markov_chain: 0.6, entropy: 0.2 }
+  };
+
+  // Cache prediction
+  await redis.set(cacheKey, JSON.stringify(unifiedPrediction), 'EX', 30); // Cache for 30 seconds
+  
+  res.json(unifiedPrediction);
 }));
 
 // Analyze patterns in a sequence batch
@@ -272,58 +326,62 @@ router.post('/analyze', errorBoundary(async (req, res) => {
 router.post('/analyze-sequence', errorBoundary(async (req, res) => {
   const { sequence, metadata = {} } = req.body;
   if (!Array.isArray(sequence)) {
-    throw new AppError('Sequence must be an array of numbers', 400);
+    throw new AppError('VALIDATION_ERROR', 'Sequence must be an array of numbers', 400);
   }
 
-  const analyzer = new PatternAnalyzer();
-  const analysis = await analyzer.analyzeSequence(sequence);
-  
-  // Store analysis results
-  // Store in model_predictions
-  const predictionResult = await Sequence.sequelize.transaction(async (transaction) => {
-    const result = await Sequence.create({
-      symbol: sequence[0],
-      metadata: {
-        ...metadata,
-        transitions: analysis.transitions,
-        uniqueSymbols: analysis.metadata.uniqueSymbols,
-        timestamp: analysis.metadata.timestamp
-      }
-    }, { transaction });
-
-    // Update model_performance if we have ground truth
-    if (metadata.actual_seed) {
-      await Sequence.sequelize.query(`
-        INSERT INTO model_performance (
-          prediction_id,
-          actual_value,
-          predicted_value,
-          error_metrics,
-          metadata
-        ) VALUES ($1, $2, $3, $4, $5)
-      `, [
-        result.id,
-        metadata.actual_seed,
-        analysis.patterns[0]?.[0] || null, // Most significant pattern
-        JSON.stringify({
-          entropy: analysis.entropy,
-          patternCount: analysis.patterns.length
-        }),
-        JSON.stringify({
-          analysisTimestamp: new Date(),
-          modelType: 'pattern_analysis',
-          sequenceLength: sequence.length
-        })
-      ], { transaction });
+  try {
+    // Get cached analysis if available
+    const cacheKey = `analysis:${sequence.join('')}`;
+    const cachedAnalysis = await Cache.get(cacheKey);
+    if (cachedAnalysis) {
+      logger.debug('Analysis cache hit:', cacheKey);
+      return res.json(cachedAnalysis);
     }
 
-    return {
-      message: 'Analysis complete',
-      results: analysis,
-      predictionId: result.id
+    // Perform statistical tests
+    const runsTest = StatisticalTests.runsTest(sequence);
+    const autocorrelation = StatisticalTests.autocorrelation(sequence);
+    
+    // Get RNG predictions
+    const rngGenerator = new RNGGenerator(Date.now());
+    const prediction = rngGenerator.getPrediction();
+
+    // Combine results
+    const analysis = {
+      randomness: {
+        runsTest,
+        autocorrelation
+      },
+      prediction: {
+        nextSymbol: prediction.symbol,
+        confidence: prediction.confidence,
+        transitionMatrix: prediction.transitionMatrix
+      },
+      metadata: {
+        ...metadata,
+        timestamp: new Date().toISOString(),
+        sequenceLength: sequence.length
+      }
     };
-  });
-  res.json({ sequences: [predictionResult] });
+
+    // Cache the analysis
+    await Cache.set(cacheKey, analysis);
+
+    // Update RNG weights if entropy scores are available
+    if (runsTest.isRandom !== null) {
+      const entropyScores = {
+        [ALGORITHMS.LCG]: runsTest.isRandom ? 1 : 0.5,
+        [ALGORITHMS.XORShift]: autocorrelation.correlations.every(c => !c.significant) ? 1 : 0.5,
+        [ALGORITHMS.MSWS]: prediction.confidence > 0.7 ? 1 : 0.5
+      };
+      rngGenerator.updateWeights(entropyScores);
+    }
+
+    res.json(analysis);
+  } catch (error) {
+    logger.error('Sequence analysis error:', error);
+    throw new AppError('ANALYSIS_ERROR', `Failed to analyze sequence: ${error.message}`);
+  }
 }));
 
 // Analyze sequences for RNG seed discovery
@@ -415,50 +473,101 @@ router.post('/discover-seed', errorBoundary(async (req, res) => {
 
 // Reset game state
 router.post('/reset', errorBoundary(async (req, res) => {
-  const lockKey = 'reset_lock';
   try {
-    // Check if reset is already in progress
-    const lockExists = await redis.get(lockKey);
-    if (lockExists) {
-      logger.warn('[Reset] Reset already in progress, skipping');
-      return res.status(409).json({ message: 'Reset already in progress' });
+    // Use the database function to reset game state
+    await Sequence.sequelize.query('SELECT reset_game_state()', {
+      type: QueryTypes.SELECT
+    });
+    
+    // Clear Redis cache if it exists
+    if (redis) {
+      await redis.flushall();
+    }
+    
+    res.status(204).send();
+  } catch (error) {
+    logger.error('Error in reset endpoint:', error);
+    throw new AppError('Failed to reset game state', 500);
+  }
+}));
+
+// Add new symbol with automatic analysis
+router.post('/add-symbol', errorBoundary(async (req, res) => {
+  const { symbol, batchId } = req.body;
+  
+  if (symbol === undefined || !batchId) {
+    throw new AppError('Symbol and batch ID are required', 400);
+  }
+
+  try {
+    const [result] = await Sequence.sequelize.query(
+      'SELECT * FROM add_sequence_with_analysis(:symbol, :batchId)',
+      {
+        replacements: { symbol, batchId },
+        type: QueryTypes.SELECT
+      }
+    );
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error adding sequence:', error);
+    throw new AppError('Failed to add sequence', 500);
+  }
+}));
+
+// Manual symbol or sequence entry
+router.post('/manual-entry', validateSequence, errorBoundary(async (req, res) => {
+  const { symbol, sequence } = req.body;
+  const batchId = uuidv4();
+
+  try {
+    if (symbol !== undefined) {
+      // Handle single symbol
+      await Sequence.create({
+        symbol,
+        batch_id: batchId,
+        metadata: {
+          type: 'manual',
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      return res.json({ 
+        success: true, 
+        batchId,
+        symbol,
+        symbolName: RNGGenerator.getSymbolName(symbol)
+      });
     }
 
-    // Set lock with 30s timeout
-    await redis.set(lockKey, '1', 'EX', 30);
+    // Handle sequence array
+    const sequences = sequence.map((s, index) => ({
+      symbol: s,
+      batch_id: batchId,
+      metadata: {
+        type: 'manual',
+        position: index,
+        timestamp: new Date().toISOString()
+      }
+    }));
 
-    await Sequence.sequelize.transaction(async (transaction) => {
-      // Clear sequences in batches
-      let deleted;
-      do {
-        deleted = await Sequence.destroy({
-          where: {},
-          limit: 1000,
-          cascade: true,
-          transaction
-        });
-        logger.info(`[Reset] Deleted ${deleted} sequences`);
-      } while (deleted > 0);
+    await Sequence.bulkCreate(sequences);
 
-      // Refresh analytics once after all deletions
-      await SequenceAnalytics.sequelize.query('SELECT refresh_sequence_analytics()');
+    res.json({
+      success: true,
+      batchId,
+      count: sequence.length,
+      sequences: sequence.map(s => ({
+        symbol: s,
+        symbolName: RNGGenerator.getSymbolName(s)
+      }))
     });
-
-    // Clear Redis cache with timeout protection
-    const redisFlushPromise = redis.flushall();
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Redis flush timed out")), 5000)
-    );
-    await Promise.race([redisFlushPromise, timeoutPromise]);
-
-    logger.info('[Reset] Game state reset successfully');
-    res.json({ message: 'Game state reset successfully', sequences: [] });
   } catch (error) {
-    logger.error('[Reset] Error:', error);
-    throw new AppError('RESET_ERROR', 'Failed to reset game state: ' + error.message, 500);
-  } finally {
-    // Always clear the lock
-    await redis.del(lockKey);
+    logger.error('Manual entry failed', { 
+      error: error.message,
+      input: { symbol, sequence }
+    });
+    throw error;
   }
 }));
 

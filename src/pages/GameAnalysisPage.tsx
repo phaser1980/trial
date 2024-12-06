@@ -93,7 +93,7 @@ const GameAnalysisPage: React.FC = () => {
 
       if (!response.ok) {
         console.error("Reset failed:", response.status);
-        throw new Error(`Failed to reset game: ${response.statusText}`);
+        throw new Error(`Failed to : ${response.statusText}`);
       }
 
       console.log("Reset successful");
@@ -111,7 +111,7 @@ const GameAnalysisPage: React.FC = () => {
       await loadData();
     } catch (error) {
       console.error("Reset error:", error);
-      handleError(error instanceof Error ? error.message : 'Failed to reset game');
+      handleError(error instanceof Error ? error.message : 'Failed to ');
     } finally {
       setLoading(false);
     }
@@ -343,14 +343,25 @@ const GameAnalysisPage: React.FC = () => {
             />
           </Grid>
           <Grid item xs={12} md={3}>
-            <Button
-              fullWidth
-              variant="contained"
-              onClick={generateTestData}
-              disabled={loading}
-            >
-              Generate Test Data
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                fullWidth
+                variant="contained"
+                onClick={generateTestData}
+                disabled={loading}
+              >
+                Generate Test Data
+              </Button>
+              <Button 
+                variant="outlined" 
+                color="secondary" 
+                onClick={resetGame}
+                disabled={loading}
+                startIcon={<UndoIcon />}
+              >
+                Reset
+              </Button>
+            </Box>
           </Grid>
         </Grid>
 
@@ -399,15 +410,6 @@ const GameAnalysisPage: React.FC = () => {
                 </IconButton>
               </Tooltip>
             </Typography>
-            <Button 
-              variant="outlined" 
-              color="secondary" 
-              onClick={resetGame}
-              disabled={loading}
-              startIcon={<UndoIcon />}
-            >
-              Reset Game
-            </Button>
           </Box>
           
           {prediction !== null && (

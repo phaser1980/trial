@@ -85,6 +85,20 @@ async function initializeDatabase() {
         }
       }
 
+      // Enforce strict schema checks and data consistency
+      const columnQuery = `
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = $1
+      `;
+      const expectedColumns = ['id', 'symbol', 'created_at', 'batch_id'];
+      const actualColumns = (await client.query(columnQuery, ['sequences'])).rows.map(col => col.column_name);
+      expectedColumns.forEach(col => {
+        if (!actualColumns.includes(col)) {
+          throw new Error(`Missing column: ${col}`);
+        }
+      });
+
       // Commit transaction
       await client.query('COMMIT');
       console.log('Database initialization completed successfully');

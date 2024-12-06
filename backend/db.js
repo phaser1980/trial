@@ -40,7 +40,8 @@ async function initializeDatabase() {
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           batch_id UUID DEFAULT gen_random_uuid(),
           entropy_value FLOAT,
-          pattern_detected BOOLEAN DEFAULT FALSE
+          pattern_detected BOOLEAN DEFAULT FALSE,
+          transitions JSONB
         ) PARTITION BY RANGE (created_at);
 
         -- Create partitions for better query performance
@@ -91,6 +92,11 @@ async function initializeDatabase() {
         FROM model_performance
         WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
         GROUP BY model_name;
+
+        -- Create materialized view for frequently accessed summary data related to RNG seeds
+        CREATE MATERIALIZED VIEW IF NOT EXISTS mv_rng_seeds AS
+        SELECT DISTINCT rng_seed
+        FROM sequences;
 
         -- Create indexes for better query performance
         CREATE INDEX IF NOT EXISTS idx_sequences_created_at ON sequences(created_at);
@@ -287,7 +293,8 @@ async function validateDatabaseSchema() {
         { name: 'id', type: 'integer' },
         { name: 'symbol', type: 'integer' },
         { name: 'created_at', type: 'timestamp with time zone' },
-        { name: 'batch_id', type: 'uuid' }
+        { name: 'batch_id', type: 'uuid' },
+        { name: 'transitions', type: 'jsonb' }
       ]
     };
 
@@ -978,6 +985,34 @@ const dbUtils = {
       logger.info('Old partitions cleaned up successfully');
     } catch (error) {
       logger.error('Failed to clean up old partitions', { error });
+      throw error;
+    }
+  },
+
+  // Function to analyze transition patterns
+  async analyzeTransitionPatterns(client, batchId) {
+    logger.info('[DB] Analyzing transition patterns', { batchId });
+    try {
+      const query = `
+        UPDATE sequences
+        SET transitions = (
+          SELECT json_object_agg(prev_symbol || '->' || next_symbol, COUNT(*))
+          FROM (
+            SELECT
+              LAG(symbol) OVER (ORDER BY created_at) AS prev_symbol,
+              symbol AS next_symbol
+            FROM sequences
+            WHERE batch_id = $1
+          ) t
+          WHERE prev_symbol IS NOT NULL
+          GROUP BY prev_symbol, next_symbol
+        )
+        WHERE batch_id = $1;
+      `;
+      await client.query(query, [batchId]);
+      logger.info('[DB] Transition patterns analyzed successfully', { batchId });
+    } catch (error) {
+      logger.error('[DB] Failed to analyze transition patterns', { error, batchId });
       throw error;
     }
   }

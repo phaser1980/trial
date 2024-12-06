@@ -10,7 +10,8 @@ const SYMBOLS = {
 const ALGORITHMS = {
   LCG: 'LCG',
   XORShift: 'XORShift',
-  MSWS: 'MSWS'
+  MSWS: 'MSWS',
+  HYBRID: 'HYBRID'
 };
 
 class RNGGenerator {
@@ -18,11 +19,20 @@ class RNGGenerator {
     this.seed = typeof seed === 'number' ? seed : Date.now();
     this.algorithm = algorithm;
     this.originalSeed = this.seed;
+    this.transitionHistory = new Array(4).fill(null).map(() => new Array(4).fill(0));
+    this.symbolHistory = [];
+    this.algorithmWeights = {
+      [ALGORITHMS.LCG]: 0.33,
+      [ALGORITHMS.XORShift]: 0.33,
+      [ALGORITHMS.MSWS]: 0.34
+    };
     logger.info(`Initialized ${algorithm} RNG with seed: ${this.seed}`);
   }
 
   reset() {
     this.seed = this.originalSeed;
+    this.transitionHistory = new Array(4).fill(null).map(() => new Array(4).fill(0));
+    this.symbolHistory = [];
     logger.info(`Reset ${this.algorithm} RNG to original seed: ${this.seed}`);
   }
 
@@ -38,9 +48,20 @@ class RNGGenerator {
       case ALGORITHMS.MSWS:
         result = this.msws();
         break;
+      case ALGORITHMS.HYBRID:
+        result = this.hybrid();
+        break;
       default:
         throw new Error(`Unknown algorithm: ${this.algorithm}`);
     }
+    
+    // Update transition history
+    if (this.symbolHistory.length > 0) {
+      const lastSymbol = this.symbolHistory[this.symbolHistory.length - 1];
+      this.transitionHistory[lastSymbol][result]++;
+    }
+    this.symbolHistory.push(result);
+    
     logger.debug(`Generated symbol: ${result} using ${this.algorithm}`);
     return result;
   }
@@ -75,6 +96,27 @@ class RNGGenerator {
     return Number(x % 4n);
   }
 
+  // Hybrid mode combining multiple algorithms
+  hybrid() {
+    const random = Math.random();
+    let cumulativeWeight = 0;
+    
+    for (const [algo, weight] of Object.entries(this.algorithmWeights)) {
+      cumulativeWeight += weight;
+      if (random <= cumulativeWeight) {
+        switch (algo) {
+          case ALGORITHMS.LCG:
+            return this.lcg();
+          case ALGORITHMS.XORShift:
+            return this.xorshift();
+          case ALGORITHMS.MSWS:
+            return this.msws();
+        }
+      }
+    }
+    return this.lcg(); // Fallback to LCG
+  }
+
   // Generate a sequence of n numbers with validation
   generateSequence(length) {
     if (!Number.isInteger(length) || length < 1) {
@@ -92,6 +134,49 @@ class RNGGenerator {
     logger.info('Sequence distribution:', distribution);
     
     return sequence;
+  }
+
+  // Update algorithm weights based on entropy performance
+  updateWeights(entropyScores) {
+    const total = Object.values(entropyScores).reduce((a, b) => a + b, 0);
+    if (total > 0) {
+      for (const [algo, score] of Object.entries(entropyScores)) {
+        this.algorithmWeights[algo] = score / total;
+      }
+      logger.info('Updated algorithm weights:', this.algorithmWeights);
+    }
+  }
+
+  getTransitionMatrix() {
+    const total = this.symbolHistory.length;
+    return this.transitionHistory.map(row => {
+      const rowSum = row.reduce((a, b) => a + b, 0);
+      return row.map(count => rowSum > 0 ? count / rowSum : 0);
+    });
+  }
+
+  getPrediction() {
+    if (this.symbolHistory.length < 3) {
+      return { symbol: null, confidence: 0 };
+    }
+
+    const lastSymbol = this.symbolHistory[this.symbolHistory.length - 1];
+    const transitions = this.transitionHistory[lastSymbol];
+    const totalTransitions = transitions.reduce((a, b) => a + b, 0);
+    
+    if (totalTransitions === 0) {
+      return { symbol: null, confidence: 0 };
+    }
+
+    const probabilities = transitions.map(count => count / totalTransitions);
+    const maxProb = Math.max(...probabilities);
+    const predictedSymbol = probabilities.indexOf(maxProb);
+
+    return {
+      symbol: predictedSymbol,
+      confidence: maxProb,
+      transitionMatrix: this.getTransitionMatrix()
+    };
   }
 
   static getSymbolName(value) {
