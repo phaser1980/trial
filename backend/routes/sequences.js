@@ -203,14 +203,14 @@ router.delete('/undo', errorBoundary(async (req, res) => {
 
 // Generate test data
 router.post('/generate', errorBoundary(async (req, res) => {
-  const { count = 100, seed } = req.body;
+  const { count = 100, seed = Date.now() } = req.body;
   
   if (!Number.isInteger(count) || count < 1 || count > 10000) {
     throw new AppError('INVALID_COUNT', 'Count must be between 1 and 10000', 400);
   }
 
   const generator = new RNGGenerator(seed);
-  const symbols = Array.from({ length: count }, () => generator.nextInt(0, 3));
+  const symbols = Array.from({ length: count }, () => Math.floor(generator.next() % 4));
 
   const result = await DatabaseManager.withTransaction(async (client) => {
     const values = symbols.map((symbol, index) => 
@@ -236,6 +236,35 @@ router.post('/generate', errorBoundary(async (req, res) => {
         created_at: sequence.created_at
       });
     });
+  }
+
+  // Queue analysis for the new batch
+  if (global.analysisQueue && result.length >= 3) {
+    const symbols = result.map(row => row.symbol);
+    const jobId = `analysis_batch_${Date.now()}`;
+    
+    try {
+      await global.analysisQueue.addJob({
+        sequenceId: result[0].id,
+        symbols,
+        timestamp: result[0].created_at,
+        metadata: {
+          batchSize: result.length,
+          seed
+        }
+      }, {
+        jobId,
+        priority: 2,
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 1000
+        }
+      });
+    } catch (error) {
+      logger.warn('Failed to queue analysis job:', error);
+      // Continue without analysis
+    }
   }
 
   res.status(201).json({
