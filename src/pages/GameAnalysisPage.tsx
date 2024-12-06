@@ -13,7 +13,13 @@ import {
   Alert,
   AlertTitle,
   Chip,
-  Paper
+  Paper,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  TextField,
+  Divider
 } from '@mui/material';
 import UndoIcon from '@mui/icons-material/Undo';
 import InfoIcon from '@mui/icons-material/Info';
@@ -40,6 +46,18 @@ const GameAnalysisPage: React.FC = () => {
   const [prediction, setPrediction] = useState<number | null>(null);
   const [predictionAccuracy, setPredictionAccuracy] = useState<number>(0);
   const [totalPredictions, setTotalPredictions] = useState<number>(0);
+  const [rngSettings, setRngSettings] = useState({
+    algorithm: 'LCG',
+    seed: Date.now(),
+    count: 100
+  });
+
+  const symbolNames = {
+    0: '♥️ Heart',
+    1: '♦️ Diamond',
+    2: '♣️ Club',
+    3: '♠️ Spade'
+  };
 
   useEffect(() => {
     loadData();
@@ -206,19 +224,29 @@ const GameAnalysisPage: React.FC = () => {
       const newBatchId = uuidv4();
       setBatchId(newBatchId);
       
-      await fetch(API_ENDPOINTS.GENERATE, {
+      console.log('Generating test data with settings:', rngSettings);
+      
+      const response = await fetch(API_ENDPOINTS.GENERATE, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           batchId: newBatchId,
-          length: 90
+          ...rngSettings
         })
       });
-      
+
+      if (!response.ok) {
+        throw new Error(`Failed to generate data: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Generation result:', result);
+
       await loadData();
     } catch (error) {
+      console.error('Generation error:', error);
       handleError(error instanceof Error ? error.message : 'Failed to generate test data');
     } finally {
       setLoading(false);
@@ -274,6 +302,88 @@ const GameAnalysisPage: React.FC = () => {
     );
   };
 
+  const renderControls = () => (
+    <Card sx={{ mb: 2 }}>
+      <CardContent>
+        <Typography variant="h6" gutterBottom>
+          Game Controls
+        </Typography>
+        <Grid container spacing={2} alignItems="center">
+          <Grid item xs={12} md={3}>
+            <FormControl fullWidth>
+              <InputLabel>RNG Algorithm</InputLabel>
+              <Select
+                value={rngSettings.algorithm}
+                onChange={(e) => setRngSettings(prev => ({ ...prev, algorithm: e.target.value }))}
+              >
+                <MenuItem value="LCG">Linear Congruential</MenuItem>
+                <MenuItem value="XORShift">XOR Shift</MenuItem>
+                <MenuItem value="MSWS">Middle Square Weyl</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <TextField
+              fullWidth
+              label="Seed Value"
+              type="number"
+              value={rngSettings.seed}
+              onChange={(e) => setRngSettings(prev => ({ ...prev, seed: Number(e.target.value) }))}
+              helperText="Controls sequence predictability"
+            />
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <TextField
+              fullWidth
+              label="Sequence Length"
+              type="number"
+              value={rngSettings.count}
+              onChange={(e) => setRngSettings(prev => ({ ...prev, count: Number(e.target.value) }))}
+              inputProps={{ min: 1, max: 10000 }}
+            />
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <Button
+              fullWidth
+              variant="contained"
+              onClick={generateTestData}
+              disabled={loading}
+            >
+              Generate Test Data
+            </Button>
+          </Grid>
+        </Grid>
+
+        <Divider sx={{ my: 2 }} />
+
+        <Typography variant="h6" gutterBottom>
+          Manual Input
+        </Typography>
+        <Grid container spacing={1}>
+          {Object.entries(symbolNames).map(([value, name]) => (
+            <Grid item key={value}>
+              <Button
+                variant="outlined"
+                onClick={() => addSymbol(Number(value))}
+                disabled={loading}
+                startIcon={name.split(' ')[0]}
+              >
+                {name.split(' ')[1]}
+              </Button>
+            </Grid>
+          ))}
+          <Grid item>
+            <Tooltip title="Undo last symbol">
+              <IconButton onClick={undoLastSymbol} disabled={loading}>
+                <UndoIcon />
+              </IconButton>
+            </Tooltip>
+          </Grid>
+        </Grid>
+      </CardContent>
+    </Card>
+  );
+
   const renderSequences = () => {
     if (!sequences || sequences.length === 0) return null;
 
@@ -293,6 +403,7 @@ const GameAnalysisPage: React.FC = () => {
               variant="outlined" 
               color="secondary" 
               onClick={resetGame}
+              disabled={loading}
               startIcon={<UndoIcon />}
             >
               Reset Game
@@ -301,11 +412,11 @@ const GameAnalysisPage: React.FC = () => {
           
           {prediction !== null && (
             <Alert severity="info" sx={{ mb: 2 }}>
-              <AlertTitle>Prediction</AlertTitle>
-              Next symbol predicted to be: {prediction}
+              <AlertTitle>Next Symbol Prediction</AlertTitle>
+              {symbolNames[prediction as keyof typeof symbolNames]}
               {totalPredictions > 0 && (
                 <Typography variant="body2">
-                  Accuracy: {(predictionAccuracy * 100).toFixed(1)}% ({totalPredictions} predictions)
+                  Prediction Accuracy: {(predictionAccuracy * 100).toFixed(1)}% ({totalPredictions} predictions)
                 </Typography>
               )}
             </Alert>
@@ -315,10 +426,10 @@ const GameAnalysisPage: React.FC = () => {
             {sequences.map((seq) => (
               <Tooltip 
                 key={seq.id}
-                title={`Entropy: ${formatMetric(seq.entropy_value)}`}
+                title={`Entropy: ${formatMetric(seq.entropy_value)} | Pattern: ${seq.pattern_detected ? 'Yes' : 'No'}`}
               >
                 <Chip
-                  label={seq.symbol}  
+                  label={symbolNames[seq.symbol as keyof typeof symbolNames]}
                   color={seq.pattern_detected ? "primary" : "default"}
                   variant={seq.pattern_detected ? "filled" : "outlined"}
                 />
@@ -371,81 +482,17 @@ const GameAnalysisPage: React.FC = () => {
 
   return (
     <Container maxWidth="lg">
-      <Box sx={{ my: 4 }}>
-        <Typography variant="h4" component="h1" gutterBottom>
-          Sequence Analysis
-        </Typography>
-        
-        {error && (
-          <Alert severity={error.type} sx={{ mb: 2 }}>
-            <AlertTitle>Error</AlertTitle>
-            {error.message}
-          </Alert>
-        )}
-
-        <Box sx={{ mb: 4 }}>
-          <Grid container spacing={2}>
-            <Grid item>
-              <Button
-                variant="contained"
-                onClick={() => addSymbol(0)}
-                disabled={loading}
-              >
-                0
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                onClick={() => addSymbol(1)}
-                disabled={loading}
-              >
-                1
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                onClick={() => addSymbol(2)}
-                disabled={loading}
-              >
-                2
-              </Button>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                onClick={() => addSymbol(3)}
-                disabled={loading}
-              >
-                3
-              </Button>
-            </Grid>
-            <Grid item>
-              <Tooltip title="Undo last symbol">
-                <IconButton onClick={undoLastSymbol} disabled={loading}>
-                  <UndoIcon />
-                </IconButton>
-              </Tooltip>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="outlined"
-                onClick={generateTestData}
-                disabled={loading}
-              >
-                Generate Test Data
-              </Button>
-            </Grid>
-          </Grid>
-        </Box>
-
-        {loading && <LinearProgress sx={{ mb: 2 }} />}
-
-        {renderAnalytics()}
-        {renderSequences()}
-        {renderRNGAnalysis()}
-      </Box>
+      {error && (
+        <Alert severity={error.type} sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error.message}
+        </Alert>
+      )}
+      
+      {renderControls()}
+      {renderAnalytics()}
+      {renderSequences()}
+      
+      {loading && <LinearProgress sx={{ mt: 2 }} />}
     </Container>
   );
 };

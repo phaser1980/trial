@@ -185,7 +185,12 @@ router.post('/generate', errorBoundary(async (req, res) => {
     throw new AppError('INVALID_COUNT', 'Count must be between 1 and 10000', 400);
   }
 
+  if (!RNGGenerator.algorithms.includes(algorithm)) {
+    throw new AppError('INVALID_ALGORITHM', `Algorithm must be one of: ${RNGGenerator.algorithms.join(', ')}`, 400);
+  }
+
   try {
+    logger.info(`Generating ${count} sequences with ${algorithm} (seed: ${seed})`);
     const rng = new RNGGenerator(seed, algorithm);
     const sequence = rng.generateSequence(count);
 
@@ -195,22 +200,30 @@ router.post('/generate', errorBoundary(async (req, res) => {
       metadata: {
         seed,
         algorithm,
+        symbolName: RNGGenerator.getSymbolName(symbol),
         timestamp: new Date().toISOString()
       }
     }));
 
     const created = await Sequence.bulkCreate(sequenceRecords);
-
+    
     // Trigger materialized view refresh
     await SequenceAnalytics.sequelize.query('SELECT refresh_sequence_analytics()');
 
     res.status(201).json({
-      sequences: created,
+      sequences: created.map(seq => ({
+        ...seq.toJSON(),
+        symbolName: RNGGenerator.getSymbolName(seq.symbol)
+      })),
       metadata: {
         batch_id: batchId,
         seed,
         algorithm,
-        count: created.length
+        count: created.length,
+        distribution: sequence.reduce((acc, val) => {
+          acc[RNGGenerator.getSymbolName(val)] = (acc[RNGGenerator.getSymbolName(val)] || 0) + 1;
+          return acc;
+        }, {})
       }
     });
 
