@@ -474,15 +474,16 @@ router.post('/discover-seed', errorBoundary(async (req, res) => {
 // Reset game state
 router.post('/reset', errorBoundary(async (req, res) => {
   try {
-    // Use the database function to reset game state
-    await Sequence.sequelize.query('SELECT reset_game_state()', {
-      type: QueryTypes.SELECT
+    // The sequences table has ON DELETE CASCADE to model_predictions
+    // This will trigger all necessary updates through existing triggers
+    await Sequence.sequelize.query('TRUNCATE TABLE sequences CASCADE;', {
+      type: QueryTypes.RAW
     });
     
-    // Clear Redis cache if it exists
-    if (redis) {
-      await redis.flushall();
-    }
+    // Refresh analytics
+    await Sequence.sequelize.query('SELECT refresh_sequence_analytics();', {
+      type: QueryTypes.RAW
+    });
     
     res.status(204).send();
   } catch (error) {
