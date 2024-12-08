@@ -19,18 +19,31 @@ class PatternModel extends BaseModel {
 
     async analyze(sequence) {
         if (!Array.isArray(sequence) || sequence.length < 2) {
+            console.log('[PatternModel] Sequence too short for pattern detection');
             return null;
         }
 
-        // Simple pattern detection: look for repeating subsequences
-        const lastFew = sequence.slice(-4);
+        // Validate sequence values
+        if (!sequence.every(val => [0, 1, 2, 3].includes(val))) {
+            console.log('[PatternModel] Invalid values in sequence');
+            return null;
+        }
+
+        // Get last 6 elements for better pattern detection
+        const lastFew = sequence.slice(-6);
         const repeats = this.findRepeatingPattern(lastFew);
 
         if (repeats) {
+            // Adjust confidence based on pattern length and repetitions
+            const confidence = Math.min(0.8, repeats.confidence * (repeats.pattern.length / 2));
             return {
                 prediction: repeats.nextValue,
-                confidence: repeats.confidence,
-                debug: { pattern: repeats.pattern }
+                confidence: confidence,
+                debug: { 
+                    pattern: repeats.pattern,
+                    patternLength: repeats.pattern.length,
+                    repetitions: repeats.repetitions
+                }
             };
         }
 
@@ -47,10 +60,22 @@ class PatternModel extends BaseModel {
                 previousPattern.length === len &&
                 pattern.every((v, i) => v === previousPattern[i])) {
                 
+                // Count total repetitions of this pattern
+                let repetitions = 0;
+                for (let i = sequence.length - len; i >= 0; i -= len) {
+                    const segment = sequence.slice(i - len, i);
+                    if (segment.every((v, j) => v === pattern[j])) {
+                        repetitions++;
+                    } else {
+                        break;
+                    }
+                }
+                
                 return {
                     pattern: pattern,
                     nextValue: pattern[0],
-                    confidence: 0.7 + (len - 2) * 0.1
+                    confidence: 0.5 + (repetitions * 0.1),  // Increase confidence with more repetitions
+                    repetitions: repetitions
                 };
             }
         }

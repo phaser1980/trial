@@ -1,168 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const { Sequence, ModelPrediction } = require('../models');
+const { Sequence, ModelPrediction, SequenceAnalytics } = require('../models');
 const logger = require('../utils/logger');
 const { errorBoundary } = require('../middleware/errorBoundary');
-const SequenceBatchProcessor = require('../utils/sequenceBatchProcessor');
 const { v4: uuidv4 } = require('uuid');
+const { Op } = require('sequelize');
 
-// Store active batch processors
-const activeBatches = new Map();
-
-// Generate test data with batched processing
-router.post('/generate', errorBoundary(async (req, res) => {
-    const { batchId, algorithm, seed, count, batchSize = 5, delayMs = 2000 } = req.body;
-    
-    // Create new batch processor
-    const processor = new SequenceBatchProcessor({
-        batchSize,
-        delayBetweenBatches: delayMs,
-        sessionId: batchId,
-        debugMode: true
-    });
-
-    // Store processor for status checks
-    activeBatches.set(batchId, processor);
-
-    // Generate symbols
-    const symbols = Array.from({ length: count }, () => Math.floor(Math.random() * 4));
-
-    // Start processing in background
-    processor.addItems(symbols);
-
-    // Return immediately with batch ID
-    res.json({ 
-        batchId,
-        message: 'Test data generation started',
-        total: count
-    });
-}));
-
-// Get batch processing status
-router.get('/batch-status', errorBoundary(async (req, res) => {
-    const { batchId } = req.query;
-    const processor = activeBatches.get(batchId);
-
-    if (!processor) {
-        return res.json({
-            status: 'complete',
-            processed: 0,
-            total: 0,
-            remaining: 0
-        });
-    }
-
-    const status = {
-        status: processor.isProcessing ? 'processing' : 'complete',
-        processed: processor.processed,
-        total: processor.queueLength + processor.processed,
-        remaining: processor.queueLength
-    };
-
-    // Clean up completed processors
-    if (!processor.isProcessing && processor.queueLength === 0) {
-        activeBatches.delete(batchId);
-    }
-
-    res.json(status);
-}));
-
-// Get recent sequences with model predictions
-router.get('/recent', errorBoundary(async (req, res) => {
+// Reset database
+router.delete('/reset', errorBoundary(async (req, res) => {
     try {
-        const sequences = await Sequence.findAll({
-            order: [['created_at', 'DESC']],
-            limit: 100,
-            include: [{
-                model: ModelPrediction,
-                as: 'predictions',
-                required: false,
-                attributes: [
-                    'id',
-                    'model_type',
-                    'prediction_data',
-                    'confidence_score',
-                    'model_name'
-                ]
-            }]
+        await Sequence.sequelize.transaction(async (transaction) => {
+            await Sequence.destroy({ where: {}, transaction });
+            await ModelPrediction.destroy({ where: {}, transaction });
         });
-
-        const response = {
-            sequences: sequences.map(seq => ({
-                id: seq.id,
-                symbol: seq.symbol,
-                created_at: seq.created_at,
-                entropy_value: seq.entropy_value || 0,
-                pattern_detected: seq.pattern_detected || false,
-                model_predictions: (seq.predictions || []).map(pred => ({
-                    model: pred.model_name,
-                    prediction: pred.prediction_data?.predicted_symbol || 0,
-                    confidence: pred.confidence_score || 0,
-                    model_type: pred.model_type
-                }))
-            }))
-        };
-
-        res.json(response);
+        
+        logger.info('[Sequences] Database reset successful');
+        res.json({ message: 'Database reset successful' });
     } catch (error) {
-        logger.error('Error fetching sequences:', error);
-        res.status(500).json({ error: 'Failed to fetch sequences' });
-    }
-}));
-
-// Get sequence analytics
-router.get('/analytics', errorBoundary(async (req, res) => {
-    try {
-        const sequences = await Sequence.findAll({
-            order: [['created_at', 'DESC']],
-            limit: 1000,
-            include: [{
-                model: ModelPrediction,
-                as: 'predictions',
-                required: false,
-                attributes: ['model_type', 'model_name', 'prediction_data', 'confidence_score']
-            }]
-        });
-
-        // Calculate analytics
-        const analytics = {
-            total_sequences: sequences.length,
-            pattern_detection: {
-                patterns_detected: sequences.filter(s => s.pattern_detected).length,
-                average_strength: sequences.reduce((acc, s) => acc + (s.pattern_strength || 0), 0) / sequences.length
-            },
-            model_performance: {},
-            recent_accuracy: 0
-        };
-
-        // Calculate model performance
-        sequences.forEach(seq => {
-            if (seq.predictions) {
-                seq.predictions.forEach(pred => {
-                    const modelName = pred.model_name;
-                    if (!analytics.model_performance[modelName]) {
-                        analytics.model_performance[modelName] = {
-                            total_predictions: 0,
-                            average_confidence: 0
-                        };
-                    }
-                    
-                    analytics.model_performance[modelName].total_predictions++;
-                    analytics.model_performance[modelName].average_confidence += pred.confidence_score || 0;
-                });
-            }
-        });
-
-        // Calculate averages
-        Object.values(analytics.model_performance).forEach(perf => {
-            perf.average_confidence = perf.average_confidence / perf.total_predictions;
-        });
-
-        res.json(analytics);
-    } catch (error) {
-        logger.error('Error fetching analytics:', error);
+        logger.error('[Sequences] Error resetting database:', error);
         res.status(500).json({ 
-            error: 'Failed to fetch analytics',
+            error: 'Failed to reset database',
             details: error.message 
         });
     }
@@ -171,64 +28,227 @@ router.get('/analytics', errorBoundary(async (req, res) => {
 // Add a single symbol
 router.post('/', errorBoundary(async (req, res) => {
     try {
-        const { symbol, batchId } = req.body;
+        const { symbol, batch_id } = req.body;
         
-        if (typeof symbol !== 'number' || symbol < 0 || symbol > 3) {
-            return res.status(400).json({ 
-                error: 'Invalid symbol. Must be a number between 0 and 3.' 
+        // Validate symbol
+        if (typeof symbol !== 'number' || ![0, 1, 2, 3].includes(symbol)) {
+            return res.status(400).json({
+                error: 'Invalid Input',
+                message: 'Symbol must be a number between 0 and 3',
+                receivedValue: symbol
             });
         }
 
-        if (!batchId) {
-            return res.status(400).json({ 
-                error: 'batchId is required' 
-            });
-        }
+        // Generate UUID for batch_id if not provided
+        const currentBatchId = batch_id || uuidv4();
 
+        // Create sequence
         const sequence = await Sequence.create({
             symbol,
-            batch_id: batchId,
-            metadata: { is_manual: true }
+            batch_id: currentBatchId,
+            metadata: {},
+            pattern_detected: false,
+            pattern_strength: 0
         });
 
-        res.json({ id: sequence.id });
+        logger.info(`[Sequences] Added symbol ${symbol} to batch ${currentBatchId}`);
+        res.json({ 
+            message: 'Symbol added successfully',
+            sequence
+        });
     } catch (error) {
-        logger.error('Error creating sequence:', error);
+        logger.error('[Sequences] Error adding symbol:', error);
         res.status(500).json({ 
-            error: 'Failed to create sequence',
-            details: error.message 
+            error: 'Failed to Add Symbol',
+            message: 'An error occurred while adding the symbol',
+            details: error.message
+        });
+    }
+}));
+
+// Get recent sequences
+router.get('/recent', errorBoundary(async (req, res) => {
+    try {
+        const sequences = await Sequence.findAll({
+            order: [['created_at', 'DESC']],
+            limit: 10
+        });
+        
+        logger.info('Fetched 10 recent sequences');
+        res.json(sequences);
+    } catch (error) {
+        logger.error('Error fetching recent sequences:', error);
+        res.status(500).json({ 
+            error: 'Internal Server Error',
+            message: 'Failed to fetch recent sequences',
+            details: error.message
         });
     }
 }));
 
 // Undo last symbol
 router.delete('/undo', errorBoundary(async (req, res) => {
-    const lastSequence = await Sequence.findOne({
-        order: [['created_at', 'DESC']]
-    });
-
-    if (lastSequence) {
-        await lastSequence.destroy();
-    }
-
-    res.json({ success: true });
-}));
-
-// Reset database (for testing)
-router.post('/reset', errorBoundary(async (req, res) => {
     try {
-        // Delete all sequences (this will cascade to model_predictions due to foreign key constraint)
-        await Sequence.destroy({
-            where: {},
-            force: true
+        const lastSequence = await Sequence.findOne({
+            order: [['created_at', 'DESC']]
         });
 
-        res.json({ message: 'Database reset successfully' });
+        if (lastSequence) {
+            await lastSequence.destroy();
+            logger.info('Last sequence deleted successfully');
+        }
+
+        res.json({ success: true });
     } catch (error) {
-        logger.error('Error resetting database:', error);
+        logger.error('Error undoing last sequence:', error);
+        res.status(500).json({
+            error: 'Failed to Undo',
+            message: 'Failed to undo last sequence',
+            details: error.message
+        });
+    }
+}));
+
+// Generate test data
+router.post('/generate', errorBoundary(async (req, res) => {
+    try {
+        const { algorithm, seed, count } = req.body;
+        
+        // Validate input
+        if (!algorithm || typeof seed !== 'number' || typeof count !== 'number') {
+            return res.status(400).json({
+                error: 'Invalid Input',
+                message: 'Missing or invalid parameters',
+                required: { algorithm: 'string', seed: 'number', count: 'number' }
+            });
+        }
+
+        // Generate symbols
+        const symbols = [];
+        for (let i = 0; i < count; i++) {
+            const symbol = Math.floor(Math.random() * 4);  // 0-3
+            symbols.push(symbol);
+        }
+
+        // Create sequences
+        const sequences = await Promise.all(
+            symbols.map(symbol => 
+                Sequence.create({
+                    symbol,
+                    metadata: { algorithm, seed },
+                    pattern_detected: false,
+                    pattern_strength: 0
+                })
+            )
+        );
+
+        logger.info(`[Sequences] Generated ${count} test sequences with ${algorithm}`);
+        res.json({ 
+            message: 'Test data generated successfully',
+            count: sequences.length
+        });
+    } catch (error) {
+        logger.error('[Sequences] Error generating test data:', error);
         res.status(500).json({ 
-            error: 'Failed to reset database',
-            details: error.message 
+            error: 'Failed to Generate',
+            message: 'Failed to generate test data',
+            details: error.message
+        });
+    }
+}));
+
+// Get analytics data
+router.get('/analytics', errorBoundary(async (req, res) => {
+    try {
+        // Get overall statistics
+        const totalSequences = await Sequence.count();
+        const uniqueBatches = await Sequence.count({
+            distinct: true,
+            col: 'batch_id'
+        });
+
+        // Get pattern detection stats
+        const patternStats = await Sequence.findAll({
+            attributes: [
+                'pattern_detected',
+                [Sequence.sequelize.fn('COUNT', '*'), 'count']
+            ],
+            group: ['pattern_detected']
+        });
+
+        // Get recent batch performance
+        const recentBatchStats = await Sequence.findAll({
+            attributes: [
+                'batch_id',
+                [Sequence.sequelize.fn('COUNT', '*'), 'sequence_count'],
+                [Sequence.sequelize.fn('AVG', Sequence.sequelize.col('pattern_strength')), 'avg_pattern_strength']
+            ],
+            where: {
+                created_at: {
+                    [Op.gte]: new Date(Date.now() - 24 * 60 * 60 * 1000) // Last 24 hours
+                }
+            },
+            group: ['batch_id'],
+            order: [[Sequence.sequelize.col('created_at'), 'DESC']],
+            limit: 5
+        });
+
+        const analytics = {
+            totalSequences,
+            uniqueBatches,
+            patternStats: patternStats.reduce((acc, curr) => {
+                acc[curr.pattern_detected ? 'detected' : 'not_detected'] = parseInt(curr.get('count'));
+                return acc;
+            }, { detected: 0, not_detected: 0 }),
+            recentBatchStats
+        };
+
+        res.json(analytics);
+    } catch (error) {
+        logger.error('[Sequences] Error fetching analytics:', error);
+        res.status(500).json({
+            error: 'Failed to fetch analytics',
+            details: error.message
+        });
+    }
+}));
+
+// Get batch status
+router.get('/batch-status', errorBoundary(async (req, res) => {
+    try {
+        const { batchId } = req.query;
+
+        if (!batchId) {
+            return res.status(400).json({
+                error: 'Missing batch ID',
+                message: 'Batch ID is required'
+            });
+        }
+
+        const batchSequences = await Sequence.findAll({
+            where: { batch_id: batchId },
+            include: [{
+                model: ModelPrediction,
+                as: 'predictions'
+            }]
+        });
+
+        const total = batchSequences.length;
+        const processed = batchSequences.filter(seq => seq.predictions && seq.predictions.length > 0).length;
+        const status = processed === total ? 'complete' : 'processing';
+
+        res.json({
+            status,
+            current: processed,
+            total,
+            progress: total > 0 ? (processed / total) * 100 : 0,
+            batch_id: batchId
+        });
+    } catch (error) {
+        logger.error('[Sequences] Error fetching batch status:', error);
+        res.status(500).json({
+            error: 'Failed to fetch batch status',
+            details: error.message
         });
     }
 }));

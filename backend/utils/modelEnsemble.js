@@ -7,11 +7,11 @@ class ModelEnsemble {
         this.models = new Map();
         this.weights = new Map();
         this.errorCorrection = new ErrorCorrection();
-        this.minConfidence = 0.6;
+        this.minConfidence = 0.3;  // Lowered from 0.6
         this.debugLog = [];
         this.performanceHistory = [];
         this.maxHistorySize = 1000;
-        this.minModelPredictions = 2; // Require at least 2 models to make a prediction
+        this.minModelPredictions = 1;  // Lowered from 2
         
         // Initialize models from registry
         this.initializeModels();
@@ -55,8 +55,8 @@ class ModelEnsemble {
 
     // Get weighted predictions from all models with enhanced error handling
     async getWeightedPredictions(sequence) {
-        const predictions = new Map();
         this.debugLog = [];
+        const predictions = new Map();
         let validPredictions = 0;
         let totalModels = this.models.size;
 
@@ -180,34 +180,48 @@ class ModelEnsemble {
 
     // Make ensemble prediction
     async predict(sequence) {
+        if (!Array.isArray(sequence)) {
+            console.error('[ModelEnsemble] Invalid sequence format');
+            return null;
+        }
+
+        // Validate sequence values
+        if (!sequence.every(val => [0, 1, 2, 3].includes(val))) {
+            console.error('[ModelEnsemble] Invalid values in sequence');
+            return null;
+        }
+
         try {
-            // Get predictions from all models
             const predictions = await this.getWeightedPredictions(sequence);
-            
-            // Skip if no valid predictions
             if (predictions.size === 0) {
-                this.debugLog.push('No valid predictions from models');
+                console.log('[ModelEnsemble] No valid predictions received');
                 return null;
             }
 
-            // Combine predictions
-            let prediction = this.combineWeightedPredictions(predictions);
-            
-            // Apply error correction
-            prediction = this.errorCorrection.correctPrediction(prediction, sequence);
-            
-            // Store prediction for performance tracking
-            this.trackPrediction(prediction, sequence);
+            const result = this.combineWeightedPredictions(predictions);
+            if (!result || result.confidence < this.minConfidence) {
+                console.log(`[ModelEnsemble] Prediction confidence too low: ${result?.confidence}`);
+                return null;
+            }
+
+            // Track this prediction for performance analysis
+            this.trackPrediction(result, sequence);
 
             return {
-                ...prediction,
-                modelPredictions: Object.fromEntries(predictions),
-                debug: this.debugLog
+                symbol: result.symbol,
+                confidence: result.confidence,
+                modelCount: predictions.size,
+                debug: {
+                    predictions: Array.from(predictions.entries()).map(([model, pred]) => ({
+                        model,
+                        symbol: pred.symbol,
+                        confidence: pred.confidence,
+                        weight: pred.weight
+                    }))
+                }
             };
-
         } catch (error) {
-            console.error('Ensemble prediction error:', error);
-            this.debugLog.push(`Ensemble error: ${error.message}`);
+            console.error('[ModelEnsemble] Error during prediction:', error);
             return null;
         }
     }

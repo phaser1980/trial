@@ -26,14 +26,17 @@ import UndoIcon from '@mui/icons-material/Undo';
 import InfoIcon from '@mui/icons-material/Info';
 import { v4 as uuidv4 } from 'uuid';
 import { 
-  SequenceAnalytics, 
-  SequenceAnalysis as ImportedSequenceAnalysis, 
-  AnalyticsResponse,
-  ModelPrediction 
+  Symbol,
+  SYMBOL_NAMES,
+  LocalSequenceAnalysis,
+  LocalModelPrediction,
+  BatchProgress,
+  transformSequence,
+  isNonNullObject
 } from '../types/analytics';
 
 // API Configuration
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:49152';
 const API_ENDPOINTS = {
   SEQUENCES: `${API_BASE_URL}/api/sequences`,
   ANALYTICS: `${API_BASE_URL}/api/sequences/analytics`,
@@ -45,36 +48,21 @@ const API_ENDPOINTS = {
   RESET: `${API_BASE_URL}/api/sequences/reset`
 };
 
-interface LocalModelPrediction {
-  model: string;
-  confidence: number;
-  prediction?: number;
-  model_type?: string;
-}
-
-interface LocalSequenceAnalysis extends Omit<ImportedSequenceAnalysis, 'id' | 'model_predictions'> {
-  id: number;
-  model_predictions?: LocalModelPrediction[];
-}
-
 const GameAnalysisPage: React.FC = () => {
   const [sequences, setSequences] = useState<LocalSequenceAnalysis[]>([]);
-  const [analytics, setAnalytics] = useState<SequenceAnalytics[]>([]);
+  const [analytics, setAnalytics] = useState<any[]>([]);
   const [error, setError] = useState<{ type: 'error' | 'warning', message: string } | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [batchId, setBatchId] = useState(() => uuidv4());
-  const [prediction, setPrediction] = useState<number | null>(null);
+  const [prediction, setPrediction] = useState<Symbol | null>(null);
   const [predictionAccuracy, setPredictionAccuracy] = useState<number>(0);
   const [totalPredictions, setTotalPredictions] = useState<number>(0);
-  const [batchProgress, setBatchProgress] = useState<{
-    processed: number;
-    total: number;
-    status: 'idle' | 'processing' | 'complete';
-  }>({
-    processed: 0,
+  const [batchProgress, setBatchProgress] = useState<BatchProgress>({
+    status: 'idle',
+    current: 0,
     total: 0,
-    status: 'idle'
+    progress: 0
   });
   const [modelDebug, setModelDebug] = useState<{
     modelName: string;
@@ -90,13 +78,6 @@ const GameAnalysisPage: React.FC = () => {
     delayMs: 2000
   });
 
-  const symbolNames = {
-    0: '♥️ Heart',
-    1: '♦️ Diamond',
-    2: '♣️ Club',
-    3: '♠️ Spade'
-  };
-
   useEffect(() => {
     loadData();
     let intervalId: NodeJS.Timeout;
@@ -110,7 +91,7 @@ const GameAnalysisPage: React.FC = () => {
           }
 
           const status = await response.json();
-          setBatchProgress(status);
+          handleBatchProgressUpdate(status);
 
           if (status.status === 'complete') {
             await loadData();
@@ -139,107 +120,69 @@ const GameAnalysisPage: React.FC = () => {
 
   const loadData = async () => {
     try {
-      console.log("Loading data...");
       const [analyticsResponse, recentResponse] = await Promise.all([
         fetch(API_ENDPOINTS.ANALYTICS),
         fetch(API_ENDPOINTS.RECENT),
       ]);
 
-      if (!analyticsResponse.ok) {
-        const analyticsError = await analyticsResponse.json() as { error: string };
-        throw new Error(`Analytics error: ${analyticsError.error || 'Failed to load analytics'}`);
-      }
-
-      if (!recentResponse.ok) {
-        const recentError = await recentResponse.json() as { error: string };
-        throw new Error(`Recent sequences error: ${recentError.error || 'Failed to load sequences'}`);
-      }
-
-      const analyticsData = await analyticsResponse.json() as SequenceAnalytics[];
-      const recentData = await recentResponse.json() as AnalyticsResponse;
-      
-      // Transform the sequences to match our local type
-      const transformedSequences = recentData.sequences.map((seq: ImportedSequenceAnalysis): LocalSequenceAnalysis => {
-        // Debug log to identify problematic predictions
-        if (seq.model_predictions) {
-          console.log('Processing sequence predictions:', 
-            seq.model_predictions.map(p => ({
-              name: p.model_name,
-              data: p.prediction_data
-            }))
-          );
+      // Check content type and status
+      for (const response of [analyticsResponse, recentResponse]) {
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`Server error: ${response.status} -`, errorText);
+          throw new Error(`Server error: ${response.status} - ${errorText}`);
         }
 
-        return {
-          ...seq,
-          id: seq.id,
-          model_predictions: seq.model_predictions?.map(pred => {
-            // Safely access prediction data with fallbacks
-            const prediction = pred.prediction_data?.predicted_symbol ?? null;
-            const confidence = pred.confidence_score ?? 0;
-            
-            return {
-              model: pred.model_name || 'unknown',
-              confidence,
-              prediction,
-              model_type: pred.model_type || 'unknown'
-            };
-          })
-        };
-      });
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.error('Invalid response content type:', contentType);
+          throw new Error('Server returned a non-JSON response');
+        }
+      }
 
-      console.log('Transformed sequences:', transformedSequences);
+      const analyticsData = await analyticsResponse.json();
+      const recentData = await recentResponse.json();
 
       setAnalytics(analyticsData);
-      setSequences(transformedSequences);
+      setSequences(
+        (recentData.sequences || [])
+          .map(transformSequence)
+          .filter((seq: LocalSequenceAnalysis | null): seq is LocalSequenceAnalysis => seq !== null)
+      );
       setError(null);
     } catch (error) {
-      console.error("Error loading data:", error);
-      if (error instanceof Error) {
-        setError({ 
-          type: 'error', 
-          message: error.message
-        });
-      } else {
-        setError({
-          type: 'error',
-          message: 'An unknown error occurred while loading data'
-        });
-      }
+      console.error('Error loading data:', error);
+      setError({ 
+        type: 'error', 
+        message: error instanceof Error ? error.message : 'Unknown error occurred' 
+      });
     }
   };
 
-  const addSymbol = async (symbolIndex: number) => {
+  const handleSymbolInput = async (symbol: number) => {
     try {
+      if (!(symbol in Symbol)) {
+        throw new Error(`Invalid symbol value: ${symbol}`);
+      }
+
       setIsLoading(true);
       const response = await fetch(API_ENDPOINTS.ADD_SYMBOL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          symbol: symbolIndex, 
-          batchId: batchId || uuidv4()
-        }),
+        body: JSON.stringify({ symbol })
       });
 
       if (!response.ok) {
-        const errorData = await response.json() as { error: string };
-        throw new Error(errorData.error || 'Failed to add symbol');
+        throw new Error('Failed to add symbol');
       }
 
       await loadData();
-      setError(null);
-    } catch (error) {
-      console.error("Error adding symbol:", error);
+      setSuccessMessage('Symbol added successfully');
+    } catch (error: unknown) {
       if (error instanceof Error) {
-        setError({ 
-          type: 'error', 
-          message: error.message
-        });
+        setError({ type: 'error', message: error.message });
       } else {
-        setError({
-          type: 'error',
-          message: 'An unknown error occurred while adding symbol'
-        });
+        setError({ type: 'error', message: 'An unknown error occurred' });
       }
     } finally {
       setIsLoading(false);
@@ -265,9 +208,10 @@ const GameAnalysisPage: React.FC = () => {
       const newBatchId = uuidv4();
       setBatchId(newBatchId);
       setBatchProgress({
-        processed: 0,
+        status: 'processing',
+        current: 0,
         total: rngSettings.count,
-        status: 'processing'
+        progress: 0
       });
       
       console.log('Generating test data with settings:', rngSettings);
@@ -390,14 +334,7 @@ const GameAnalysisPage: React.FC = () => {
 
         {batchProgress.status === 'processing' && (
           <Box sx={{ mt: 2 }}>
-            <LinearProgress 
-              variant="determinate" 
-              value={(batchProgress.processed / batchProgress.total) * 100} 
-            />
-            <Typography variant="caption" sx={{ mt: 1, display: 'block' }}>
-              Processing batch {batchProgress.processed + 1} of {batchProgress.total}
-              {' '}({((batchProgress.processed / batchProgress.total) * 100).toFixed(1)}% complete)
-            </Typography>
+            {renderBatchProgress()}
           </Box>
         )}
 
@@ -407,11 +344,11 @@ const GameAnalysisPage: React.FC = () => {
           Manual Input
         </Typography>
         <Grid container spacing={1}>
-          {Object.entries(symbolNames).map(([value, name]) => (
+          {Object.entries(SYMBOL_NAMES).map(([value, name]) => (
             <Grid item key={value}>
               <Button
                 variant="outlined"
-                onClick={() => addSymbol(Number(value))}
+                onClick={() => handleSymbolInput(Number(value))}
                 disabled={isLoading || batchProgress.status === 'processing'}
                 startIcon={name.split(' ')[0]}
               >
@@ -444,32 +381,107 @@ const GameAnalysisPage: React.FC = () => {
     </Card>
   );
 
-  const handleReset = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      setSuccessMessage(null);
+  const handleBatchProgressUpdate = (status: Partial<BatchProgress>) => {
+    setBatchProgress(prev => ({
+      ...prev,
+      current: status.current ?? prev.current,
+      total: status.total ?? prev.total,
+      progress: Math.round(((status.current || 0) / (status.total || 1)) * 100),
+      status: status.status || prev.status
+    }));
+  };
 
-      const response = await fetch(API_ENDPOINTS.RESET, {
-        method: 'POST',
-      });
+  const renderPredictions = () => {
+    if (!sequences.length) return null;
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to reset database');
-      }
+    const latestSequence = sequences[sequences.length - 1];
+    if (!latestSequence.model_predictions?.length) return null;
 
-      await loadData(); // Reload data after reset
-      setSuccessMessage('Database reset successfully');
-    } catch (error) {
-      console.error('Error resetting database:', error);
-      setError({
-        type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to reset database'
-      });
-    } finally {
-      setIsLoading(false);
+    return (
+      <>
+        {prediction === null && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <AlertTitle>Individual Model Predictions</AlertTitle>
+            {latestSequence.model_predictions.map((pred, idx) => (
+              <div key={idx}>
+                {pred.model_name}: {SYMBOL_NAMES[pred.prediction_data.predicted_symbol]}
+                ({(pred.confidence_score * 100).toFixed(1)}% confidence)
+                {pred.prediction_data.details && (
+                  <Typography variant="caption" display="block" sx={{ ml: 2 }}>
+                    {Object.entries(pred.prediction_data.details)
+                      .map(([key, value]) => `${key}: ${value}`)
+                      .join(', ')}
+                  </Typography>
+                )}
+              </div>
+            ))}
+          </Alert>
+        )}
+        {prediction !== null && (
+          <Alert severity="success" sx={{ mb: 2 }}>
+            <AlertTitle>Ensemble Prediction</AlertTitle>
+            <Typography variant="body1">
+              Next predicted symbol: {prediction !== null ? SYMBOL_NAMES[prediction] : 'None'}
+            </Typography>
+            <Typography variant="body2">
+              Accuracy: {(predictionAccuracy * 100).toFixed(1)}% 
+              ({totalPredictions} predictions)
+            </Typography>
+          </Alert>
+        )}
+      </>
+    );
+  };
+
+  const renderSymbol = (symbol: Symbol) => (
+    <span className="symbol">{SYMBOL_NAMES[symbol]}</span>
+  );
+
+  const renderPredictionDetails = (prediction: LocalModelPrediction) => (
+    <div className="prediction-details">
+      <strong>{prediction.model_name}</strong>: {renderSymbol(prediction.prediction_data.predicted_symbol)}
+      {prediction.prediction_data.details && (
+        <div className="details">
+          {Object.entries(prediction.prediction_data.details).map(([key, value]) => (
+            <div key={key}>
+              {key}: {typeof value === 'number' ? value.toFixed(4) : String(value)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderSequenceTooltip = (seq: LocalSequenceAnalysis) => (
+    <Box sx={{ p: 1 }}>
+      <Typography variant="body2">
+        Symbol: {SYMBOL_NAMES[seq.symbol]}
+      </Typography>
+      {seq.model_predictions.map((pred, idx) => (
+        <div key={idx}>
+          {renderPredictionDetails(pred)}
+        </div>
+      ))}
+    </Box>
+  );
+
+  const renderBatchProgress = () => {
+    if (batchProgress.status === 'processing') {
+      return (
+        <Box sx={{ width: '100%', mb: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Processing batch {batchProgress.current} of {batchProgress.total} 
+            ({batchProgress.progress}% complete)
+          </Typography>
+          <LinearProgress 
+            variant="determinate" 
+            value={batchProgress.progress} 
+            sx={{ mt: 1 }} 
+          />
+        </Box>
+      );
     }
+    return null;
   };
 
   const renderModelDebug = () => {
@@ -505,7 +517,7 @@ const GameAnalysisPage: React.FC = () => {
   };
 
   const renderSequences = () => {
-    if (!sequences || sequences.length === 0) return null;
+    if (!sequences.length) return null;
 
     return (
       <Card sx={{ mt: 2 }}>
@@ -521,37 +533,16 @@ const GameAnalysisPage: React.FC = () => {
             </Typography>
           </Box>
           
-          {prediction !== null && (
-            <Alert severity="info" sx={{ mb: 2 }}>
-              <AlertTitle>Next Symbol Prediction</AlertTitle>
-              {symbolNames[prediction as keyof typeof symbolNames]}
-              {totalPredictions > 0 && (
-                <Typography variant="body2">
-                  Prediction Accuracy: {(predictionAccuracy * 100).toFixed(1)}% ({totalPredictions} predictions)
-                </Typography>
-              )}
-            </Alert>
-          )}
+          {renderPredictions()}
 
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             {sequences.map((seq) => (
               <Tooltip 
                 key={seq.id}
-                title={
-                  <>
-                    Entropy: {formatMetric(seq.entropy_value)}
-                    <br />
-                    Pattern: {seq.pattern_detected ? 'Yes' : 'No'}
-                    {seq.model_predictions?.map(pred => (
-                      <div key={pred.model}>
-                        {pred.model}: {(pred.confidence * 100).toFixed(1)}% confident
-                      </div>
-                    ))}
-                  </>
-                }
+                title={renderSequenceTooltip(seq)}
               >
                 <Chip
-                  label={symbolNames[seq.symbol as keyof typeof symbolNames]}
+                  label={SYMBOL_NAMES[seq.symbol]}
                   color={seq.pattern_detected ? "primary" : "default"}
                   variant={seq.pattern_detected ? "filled" : "outlined"}
                 />
@@ -561,6 +552,49 @@ const GameAnalysisPage: React.FC = () => {
         </CardContent>
       </Card>
     );
+  };
+
+  useEffect(() => {
+    if (sequences.length > 0) {
+      console.log('Loaded sequences with predictions:', 
+        sequences.map(seq => ({
+          symbol: seq.symbol,
+          predictions: seq.model_predictions?.map(p => ({
+            model: p.model_name,
+            prediction: p.prediction_data.predicted_symbol,
+            confidence: p.confidence_score
+          }))
+        }))
+      );
+    }
+  }, [sequences]);
+
+  const handleReset = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      const response = await fetch(API_ENDPOINTS.RESET, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to reset database');
+      }
+
+      await loadData(); // Reload data after reset
+      setSuccessMessage('Database reset successfully');
+    } catch (error) {
+      console.error('Error resetting database:', error);
+      setError({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Failed to reset database'
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

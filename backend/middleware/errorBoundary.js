@@ -70,30 +70,29 @@ const errorBoundary = (fn) => async (req, res, next) => {
   try {
     await fn(req, res, next);
   } catch (error) {
-    const context = getErrorContext(error);
-    const errorResponse = {
-      error: true,
-      code: error.code || 'INTERNAL_ERROR',
-      message: error.message,
-      status: error.status || 500,
-      timestamp: error.timestamp || new Date().toISOString(),
-      hint: context.hint,
-      action: context.action,
-      request: {
-        path: req.path,
-        method: req.method,
-        query: req.query,
-        body: process.env.NODE_ENV === 'development' ? req.body : undefined
-      }
-    };
-
-    logger.error('Request failed:', {
-      ...errorResponse,
+    logger.error('Route error:', {
+      error: error.message,
       stack: error.stack,
-      user: req.user?.id
+      path: req.path
     });
 
-    res.status(errorResponse.status).json(errorResponse);
+    // Ensure JSON response
+    res.setHeader('Content-Type', 'application/json');
+    
+    if (error instanceof AppError) {
+      const context = getErrorContext(error);
+      res.status(error.status).json({
+        error: error.message,
+        code: error.code,
+        timestamp: error.timestamp,
+        ...context
+      });
+    } else {
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message || 'An unexpected error occurred'
+      });
+    }
   }
 };
 
