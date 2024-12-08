@@ -14,17 +14,14 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Rate limiting middleware
+// Simple rate limiter for single-user app
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: {
-    error: 'Too many requests from this IP, please try again later'
-  },
-  standardHeaders: true,
-  legacyHeaders: false
+  windowMs: 1 * 60 * 1000, // 1-minute window
+  max: 1000,               // 1000 requests per minute (generous for single user)
+  message: 'Rate limit exceeded. Please try again in a moment.'
 });
 
+// Apply CORS and JSON middleware
 app.use(cors());
 app.use(express.json());
 app.use(limiter);
@@ -40,12 +37,12 @@ app.use((err, req, res, next) => {
     stack: err.stack
   });
   
-  res.status(500).json({
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: 'An unexpected error occurred'
-    }
-  });
+  // Simple error response
+  if (err.statusCode === 429) {
+    return res.status(429).send('Rate limit exceeded. Please try again in a moment.');
+  }
+  
+  res.status(500).send('An unexpected error occurred');
 });
 
 async function isPortInUse(port) {

@@ -25,13 +25,13 @@ class SequenceBatchProcessor extends BatchProcessor {
                 // Store sequence in database
                 const sequence = await Sequence.create({
                     symbol,
-                    session_id: this.sessionId,
+                    batch_id: this.sessionId, // Use sessionId as batch_id
                     is_test_data: true
                 });
 
                 // Get recent sequences for context
                 const recentSequences = await Sequence.findAll({
-                    where: { session_id: this.sessionId },
+                    where: { batch_id: this.sessionId }, // Update where clause to use batch_id
                     order: [['created_at', 'DESC']],
                     limit: 50,
                     raw: true
@@ -46,10 +46,17 @@ class SequenceBatchProcessor extends BatchProcessor {
                 for (const [modelName, prediction] of predictions.entries()) {
                     await ModelPrediction.create({
                         sequence_id: sequence.id,
+                        model_type: 'ensemble',
                         model_name: modelName,
-                        predicted_symbol: prediction.symbol,
-                        confidence: prediction.confidence,
-                        debug_info: prediction.debug
+                        prediction_data: {
+                            predicted_symbol: prediction.symbol,
+                            details: prediction.details || {}
+                        },
+                        confidence_score: prediction.confidence,
+                        metadata: {
+                            is_test_data: true,
+                            batch_id: this.sessionId
+                        }
                     });
                 }
 

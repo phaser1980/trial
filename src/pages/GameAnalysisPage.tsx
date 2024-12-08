@@ -25,7 +25,12 @@ import {
 import UndoIcon from '@mui/icons-material/Undo';
 import InfoIcon from '@mui/icons-material/Info';
 import { v4 as uuidv4 } from 'uuid';
-import { SequenceAnalytics, SequenceAnalysis, AnalyticsResponse } from '../types/analytics';
+import { 
+  SequenceAnalytics, 
+  SequenceAnalysis as ImportedSequenceAnalysis, 
+  AnalyticsResponse,
+  ModelPrediction 
+} from '../types/analytics';
 
 // API Configuration
 const API_BASE_URL = 'http://localhost:5000';
@@ -36,24 +41,41 @@ const API_ENDPOINTS = {
   ADD_SYMBOL: `${API_BASE_URL}/api/sequences`,
   UNDO: `${API_BASE_URL}/api/sequences/undo`,
   GENERATE: `${API_BASE_URL}/api/sequences/generate`,
-  BATCH_STATUS: `${API_BASE_URL}/api/sequences/batch-status`
+  BATCH_STATUS: `${API_BASE_URL}/api/sequences/batch-status`,
+  RESET: `${API_BASE_URL}/api/sequences/reset`
 };
 
+interface LocalModelPrediction {
+  model: string;
+  confidence: number;
+  prediction?: number;
+  model_type?: string;
+}
+
+interface LocalSequenceAnalysis extends Omit<ImportedSequenceAnalysis, 'id' | 'model_predictions'> {
+  id: number;
+  model_predictions?: LocalModelPrediction[];
+}
+
 const GameAnalysisPage: React.FC = () => {
-  const [sequences, setSequences] = useState<SequenceAnalysis[]>([]);
+  const [sequences, setSequences] = useState<LocalSequenceAnalysis[]>([]);
   const [analytics, setAnalytics] = useState<SequenceAnalytics[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<{type: 'error' | 'warning', message: string} | null>(null);
-  const [batchId, setBatchId] = useState<string>(uuidv4());
+  const [error, setError] = useState<{ type: 'error' | 'warning', message: string } | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [batchId, setBatchId] = useState(() => uuidv4());
   const [prediction, setPrediction] = useState<number | null>(null);
   const [predictionAccuracy, setPredictionAccuracy] = useState<number>(0);
   const [totalPredictions, setTotalPredictions] = useState<number>(0);
   const [batchProgress, setBatchProgress] = useState<{
     processed: number;
     total: number;
-    remaining: number;
     status: 'idle' | 'processing' | 'complete';
-  }>({ processed: 0, total: 0, remaining: 0, status: 'idle' });
+  }>({
+    processed: 0,
+    total: 0,
+    status: 'idle'
+  });
   const [modelDebug, setModelDebug] = useState<{
     modelName: string;
     predictions: number;
@@ -77,49 +99,174 @@ const GameAnalysisPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
-    // Set up polling for batch status when processing
-    let pollInterval: NodeJS.Timeout;
-    if (batchProgress.status === 'processing') {
-      pollInterval = setInterval(checkBatchStatus, 1000);
-    }
-    return () => {
-      if (pollInterval) clearInterval(pollInterval);
-    };
-  }, [batchProgress.status]);
+    let intervalId: NodeJS.Timeout;
 
-  const checkBatchStatus = async () => {
-    try {
-      const response = await fetch(`${API_ENDPOINTS.BATCH_STATUS}?batchId=${batchId}`);
-      if (!response.ok) return;
-      
-      const status = await response.json();
-      setBatchProgress(status);
-      
-      if (status.status === 'complete') {
-        await loadData();
+    const checkStatus = async () => {
+      if (batchProgress.status === 'processing') {
+        try {
+          const response = await fetch(`${API_ENDPOINTS.BATCH_STATUS}?batchId=${batchId}`);
+          if (!response.ok) {
+            throw new Error('Failed to check batch status');
+          }
+
+          const status = await response.json();
+          setBatchProgress(status);
+
+          if (status.status === 'complete') {
+            await loadData();
+          }
+        } catch (error) {
+          console.error('Error checking batch status:', error);
+        }
       }
-    } catch (error) {
-      console.error('Failed to check batch status:', error);
+    };
+
+    if (batchProgress.status === 'processing') {
+      intervalId = setInterval(checkStatus, 5000);
     }
-  };
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [batchProgress.status, batchId]);
 
   const handleError = (message: string) => {
     console.error(message);
     setError({ message, type: 'error' });
   };
 
-  // ... (keep existing resetGame, loadData, addSymbol, and undoLastSymbol functions)
+  const loadData = async () => {
+    try {
+      console.log("Loading data...");
+      const [analyticsResponse, recentResponse] = await Promise.all([
+        fetch(API_ENDPOINTS.ANALYTICS),
+        fetch(API_ENDPOINTS.RECENT),
+      ]);
+
+      if (!analyticsResponse.ok) {
+        const analyticsError = await analyticsResponse.json() as { error: string };
+        throw new Error(`Analytics error: ${analyticsError.error || 'Failed to load analytics'}`);
+      }
+
+      if (!recentResponse.ok) {
+        const recentError = await recentResponse.json() as { error: string };
+        throw new Error(`Recent sequences error: ${recentError.error || 'Failed to load sequences'}`);
+      }
+
+      const analyticsData = await analyticsResponse.json() as SequenceAnalytics[];
+      const recentData = await recentResponse.json() as AnalyticsResponse;
+      
+      // Transform the sequences to match our local type
+      const transformedSequences = recentData.sequences.map((seq: ImportedSequenceAnalysis): LocalSequenceAnalysis => {
+        // Debug log to identify problematic predictions
+        if (seq.model_predictions) {
+          console.log('Processing sequence predictions:', 
+            seq.model_predictions.map(p => ({
+              name: p.model_name,
+              data: p.prediction_data
+            }))
+          );
+        }
+
+        return {
+          ...seq,
+          id: seq.id,
+          model_predictions: seq.model_predictions?.map(pred => {
+            // Safely access prediction data with fallbacks
+            const prediction = pred.prediction_data?.predicted_symbol ?? null;
+            const confidence = pred.confidence_score ?? 0;
+            
+            return {
+              model: pred.model_name || 'unknown',
+              confidence,
+              prediction,
+              model_type: pred.model_type || 'unknown'
+            };
+          })
+        };
+      });
+
+      console.log('Transformed sequences:', transformedSequences);
+
+      setAnalytics(analyticsData);
+      setSequences(transformedSequences);
+      setError(null);
+    } catch (error) {
+      console.error("Error loading data:", error);
+      if (error instanceof Error) {
+        setError({ 
+          type: 'error', 
+          message: error.message
+        });
+      } else {
+        setError({
+          type: 'error',
+          message: 'An unknown error occurred while loading data'
+        });
+      }
+    }
+  };
+
+  const addSymbol = async (symbolIndex: number) => {
+    try {
+      setIsLoading(true);
+      const response = await fetch(API_ENDPOINTS.ADD_SYMBOL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          symbol: symbolIndex, 
+          batchId: batchId || uuidv4()
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json() as { error: string };
+        throw new Error(errorData.error || 'Failed to add symbol');
+      }
+
+      await loadData();
+      setError(null);
+    } catch (error) {
+      console.error("Error adding symbol:", error);
+      if (error instanceof Error) {
+        setError({ 
+          type: 'error', 
+          message: error.message
+        });
+      } else {
+        setError({
+          type: 'error',
+          message: 'An unknown error occurred while adding symbol'
+        });
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const undoLastSymbol = async () => {
+    try {
+      setIsLoading(true);
+      await fetch(API_ENDPOINTS.UNDO, { method: 'DELETE' });
+      await loadData();
+    } catch (error) {
+      setError({ type: 'error', message: 'Failed to undo the last symbol' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const generateTestData = async () => {
     try {
       setError(null);
-      setLoading(true);
+      setIsLoading(true);
       const newBatchId = uuidv4();
       setBatchId(newBatchId);
       setBatchProgress({
         processed: 0,
         total: rngSettings.count,
-        remaining: rngSettings.count,
         status: 'processing'
       });
       
@@ -148,7 +295,7 @@ const GameAnalysisPage: React.FC = () => {
       handleError(error instanceof Error ? error.message : 'Failed to generate test data');
       setBatchProgress(prev => ({ ...prev, status: 'idle' }));
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -228,7 +375,7 @@ const GameAnalysisPage: React.FC = () => {
                 fullWidth
                 variant="contained"
                 onClick={generateTestData}
-                disabled={loading || batchProgress.status === 'processing'}
+                disabled={isLoading || batchProgress.status === 'processing'}
               >
                 {batchProgress.status === 'processing' ? (
                   <>
@@ -265,7 +412,7 @@ const GameAnalysisPage: React.FC = () => {
               <Button
                 variant="outlined"
                 onClick={() => addSymbol(Number(value))}
-                disabled={loading || batchProgress.status === 'processing'}
+                disabled={isLoading || batchProgress.status === 'processing'}
                 startIcon={name.split(' ')[0]}
               >
                 {name.split(' ')[1]}
@@ -276,16 +423,54 @@ const GameAnalysisPage: React.FC = () => {
             <Tooltip title="Undo last symbol">
               <IconButton 
                 onClick={undoLastSymbol} 
-                disabled={loading || batchProgress.status === 'processing'}
+                disabled={isLoading || batchProgress.status === 'processing'}
               >
                 <UndoIcon />
               </IconButton>
             </Tooltip>
           </Grid>
+          <Grid item>
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleReset}
+              disabled={isLoading || batchProgress.status === 'processing'}
+            >
+              Reset Database
+            </Button>
+          </Grid>
         </Grid>
       </CardContent>
     </Card>
   );
+
+  const handleReset = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      const response = await fetch(API_ENDPOINTS.RESET, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to reset database');
+      }
+
+      await loadData(); // Reload data after reset
+      setSuccessMessage('Database reset successfully');
+    } catch (error) {
+      console.error('Error resetting database:', error);
+      setError({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Failed to reset database'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const renderModelDebug = () => {
     if (!modelDebug.length) return null;
@@ -380,18 +565,34 @@ const GameAnalysisPage: React.FC = () => {
 
   return (
     <Container maxWidth="lg">
-      {error && (
-        <Alert severity={error.type} sx={{ mb: 2 }} onClose={() => setError(null)}>
-          {error.message}
-        </Alert>
-      )}
-      
-      {renderControls()}
-      {renderAnalytics()}
-      {renderModelDebug()}
-      {renderSequences()}
-      
-      {loading && <LinearProgress sx={{ mt: 2 }} />}
+      <Box sx={{ my: 4 }}>
+        <>
+          <Typography variant="h4" component="h1" gutterBottom>
+            Game Analysis
+          </Typography>
+
+          {/* Error and Success Messages */}
+          {error && (
+            <Alert severity={error.type} sx={{ mb: 2 }} onClose={() => setError(null)}>
+              <AlertTitle>{error.type === 'error' ? 'Error' : 'Warning'}</AlertTitle>
+              {error.message}
+            </Alert>
+          )}
+          {successMessage && (
+            <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMessage(null)}>
+              <AlertTitle>Success</AlertTitle>
+              {successMessage}
+            </Alert>
+          )}
+          
+          {/* Control Panel */}
+          {renderControls()}
+          {renderAnalytics()}
+          {renderModelDebug()}
+          {renderSequences()}
+          {isLoading && <LinearProgress sx={{ mt: 2 }} />}
+        </>
+      </Box>
     </Container>
   );
 };

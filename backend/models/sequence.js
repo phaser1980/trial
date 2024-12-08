@@ -5,9 +5,9 @@ class Sequence extends Model {}
 
 Sequence.init({
   id: {
-    type: DataTypes.UUID,
-    defaultValue: DataTypes.UUIDV4,
-    primaryKey: true
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
   },
   symbol: {
     type: DataTypes.INTEGER,
@@ -46,20 +46,24 @@ Sequence.init({
 }, {
   sequelize,
   modelName: 'Sequence',
-  tableName: 'sequences_partitioned',
+  tableName: 'sequences',
   timestamps: false,
   indexes: [
     {
-      fields: ['created_at'],
-      using: 'BRIN'
+      name: 'idx_sequences_batch_id',
+      fields: ['batch_id']
     },
     {
-      fields: ['batch_id'],
-      using: 'HASH'
+      name: 'idx_sequences_created_at',
+      fields: ['created_at']
     },
     {
-      fields: ['entropy_value'],
-      using: 'BTREE'
+      name: 'idx_sequences_entropy',
+      fields: ['entropy_value']
+    },
+    {
+      name: 'idx_sequences_pattern_detected',
+      fields: ['pattern_detected']
     }
   ]
 });

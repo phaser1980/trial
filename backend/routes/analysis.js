@@ -1600,7 +1600,7 @@ router.get('/', async (req, res) => {
     const performanceMetrics = {};
     for (const name of Object.keys(analysisTools)) {
       try {
-        const metrics = await db.getModelPerformance(client, name, 1);
+        const metricsResult = await db.getModelPerformance(client, name, 1);
         const defaultMetrics = {
           accuracy: 0,
           confidence_calibration: 0,
@@ -1610,23 +1610,23 @@ router.get('/', async (req, res) => {
           model_type: name
         };
 
-        if (metrics && metrics.rows && metrics.rows.length > 0) {
-          performanceMetrics[name] = {
-            ...defaultMetrics,
-            ...metrics.rows[0]
-          };
-        } else {
-          performanceMetrics[name] = defaultMetrics;
-        }
+        performanceMetrics[name] = {
+          ...defaultMetrics,
+          ...(metricsResult && metricsResult.rows && metricsResult.rows.length > 0 ? metricsResult.rows[0] : {})
+        };
       } catch (error) {
-        logger.error(`Error fetching performance metrics for ${name}:`, error);
+        logger.error(`[Analysis] Error getting performance metrics for ${name}:`, {
+          error: error.message,
+          stack: error.stack
+        });
         performanceMetrics[name] = {
           accuracy: 0,
           confidence_calibration: 0,
-          needs_retraining: false,
+          needs_retraining: true,
           total_predictions: 0,
           correct_predictions: 0,
-          model_type: name
+          model_type: name,
+          error: error.message
         };
       }
     }
@@ -1732,6 +1732,70 @@ router.get('/performance/:modelName', async (req, res) => {
     res.status(500).json({
       error: 'Failed to fetch model performance metrics',
       details: error.message
+    });
+  }
+});
+
+router.get('/model-performance', async (req, res) => {
+  const modelName = req.query.model;
+  const limit = parseInt(req.query.limit) || 100;
+
+  logger.info('[API] Fetching model performance', { 
+    modelName, 
+    limit,
+    requestId: req.id 
+  });
+
+  try {
+    const client = await pool.connect();
+    try {
+      const result = await db.getModelPerformance(client, modelName, limit);
+      
+      // Transform data for frontend visualization
+      const metrics = result.rows.map(row => ({
+        modelType: row.model_type,
+        accuracy: row.accuracy || 0,
+        confidenceCalibration: row.confidence_calibration || 0,
+        needsRetraining: row.needs_retraining || false,
+        totalPredictions: row.total_predictions || 0,
+        correctPredictions: row.correct_predictions || 0,
+        timestamp: row.created_at,
+        metadata: row.metadata || {}
+      }));
+
+      logger.info('[API] Successfully retrieved model performance', { 
+        modelName,
+        metricsCount: metrics.length,
+        requestId: req.id
+      });
+
+      res.json({ 
+        success: true,
+        metrics,
+        summary: {
+          totalRecords: metrics.length,
+          latestAccuracy: metrics[0]?.accuracy || 0,
+          averageAccuracy: metrics.reduce((sum, m) => sum + m.accuracy, 0) / (metrics.length || 1)
+        }
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    logger.error('[API] Error fetching model performance', {
+      error: {
+        message: error.message,
+        stack: error.stack,
+        code: error.code
+      },
+      modelName,
+      requestId: req.id
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch model performance metrics',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

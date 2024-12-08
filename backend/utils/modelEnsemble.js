@@ -1,5 +1,6 @@
 const tf = require('@tensorflow/tfjs');
 const ErrorCorrection = require('./errorCorrection');
+const modelRegistry = require('./modelRegistry');
 
 class ModelEnsemble {
     constructor() {
@@ -11,6 +12,18 @@ class ModelEnsemble {
         this.performanceHistory = [];
         this.maxHistorySize = 1000;
         this.minModelPredictions = 2; // Require at least 2 models to make a prediction
+        
+        // Initialize models from registry
+        this.initializeModels();
+    }
+
+    initializeModels() {
+        const registeredModels = modelRegistry.getAllModels();
+        for (const model of registeredModels) {
+            this.addModel(model.name, model);
+        }
+        console.log(`[ModelEnsemble] Initialized ${registeredModels.length} models:`, 
+            registeredModels.map(m => m.name).join(', '));
     }
 
     // Add a model to the ensemble

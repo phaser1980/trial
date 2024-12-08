@@ -71,27 +71,30 @@ async function initializeDatabase() {
         -- Model performance metrics with materialized view
         CREATE TABLE IF NOT EXISTS model_performance (
           id SERIAL PRIMARY KEY,
-          model_name VARCHAR(50) NOT NULL,
+          model_type VARCHAR(50) NOT NULL,
           accuracy FLOAT,
           confidence_calibration FLOAT,
-          sample_size INTEGER,
-          last_retrain_at TIMESTAMP,
+          total_predictions INTEGER DEFAULT 0,
+          correct_predictions INTEGER DEFAULT 0,
           needs_retraining BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT unique_model_metrics UNIQUE (model_name, created_at)
+          metadata JSONB DEFAULT '{}',
+          CONSTRAINT unique_model_metrics UNIQUE (model_type, created_at)
         );
 
         -- Create materialized view for quick access to recent performance metrics
         CREATE MATERIALIZED VIEW IF NOT EXISTS recent_model_performance AS
         SELECT 
-          model_name,
+          model_type,
           AVG(accuracy) as avg_accuracy,
           AVG(confidence_calibration) as avg_calibration,
-          COUNT(*) as metric_count,
+          SUM(total_predictions) as total_predictions,
+          SUM(correct_predictions) as correct_predictions,
+          bool_or(needs_retraining) as needs_retraining,
           MAX(created_at) as last_updated
         FROM model_performance
         WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
-        GROUP BY model_name;
+        GROUP BY model_type;
 
         -- Create materialized view for frequently accessed summary data related to RNG seeds
         CREATE MATERIALIZED VIEW IF NOT EXISTS mv_rng_seeds AS
@@ -104,7 +107,7 @@ async function initializeDatabase() {
         CREATE INDEX IF NOT EXISTS idx_model_predictions_sequence_id ON model_predictions(sequence_id);
         CREATE INDEX IF NOT EXISTS idx_model_predictions_model_name ON model_predictions(model_name);
         CREATE INDEX IF NOT EXISTS idx_model_predictions_created_at ON model_predictions(created_at);
-        CREATE INDEX IF NOT EXISTS idx_model_performance_model_name ON model_performance(model_name);
+        CREATE INDEX IF NOT EXISTS idx_model_performance_model_name ON model_performance(model_type);
         CREATE INDEX IF NOT EXISTS idx_model_performance_created_at ON model_performance(created_at);
       `);
 
@@ -829,50 +832,34 @@ const dbUtils = {
     logger.info('[DB] Attempting to get model performance', {
       modelName,
       limit,
-      transactionActive: client.transactionStatus,
       connectionStatus: client.connectionParameters
     });
 
     try {
-      // Validate table existence first
-      const tableCheck = await client.query(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_schema = 'public'
-          AND table_name = 'model_performance'
-        );
-      `);
-
-      if (!tableCheck.rows[0].exists) {
-        const error = new Error('Table model_performance does not exist');
-        logger.error('[DB] Table validation failed', { error });
-        throw error;
-      }
-
-      // Validate column existence
-      const columnCheck = await client.query(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.columns 
-          WHERE table_schema = 'public'
-          AND table_name = 'model_performance'
-          AND column_name = 'model_type'
-        );
-      `);
-
-      if (!columnCheck.rows[0].exists) {
-        const error = new Error('Column model_type does not exist in model_performance table');
-        logger.error('[DB] Schema validation failed', { error });
-        throw error;
-      }
-
       const query = modelName ? `
-        SELECT *
+        SELECT 
+          model_type,
+          accuracy,
+          confidence_calibration,
+          needs_retraining,
+          total_predictions,
+          correct_predictions,
+          created_at,
+          metadata
         FROM model_performance
         WHERE model_type = $1
         ORDER BY created_at DESC
         LIMIT $2;
       ` : `
-        SELECT *
+        SELECT 
+          model_type,
+          accuracy,
+          confidence_calibration,
+          needs_retraining,
+          total_predictions,
+          correct_predictions,
+          created_at,
+          metadata
         FROM model_performance
         ORDER BY created_at DESC
         LIMIT $1;
@@ -891,28 +878,24 @@ const dbUtils = {
       logger.info('[DB] Retrieved model performance', { 
         modelName,
         rowCount: result.rowCount,
-        firstRow: result.rows[0] ? { 
-          id: result.rows[0].id,
+        firstRow: result.rows?.[0] ? { 
           model_type: result.rows[0].model_type,
           created_at: result.rows[0].created_at 
         } : null
       });
 
-      return result.rows;
+      return result;
     } catch (error) {
       logger.error('[DB] Failed to get model performance', { 
         error: {
           message: error.message,
           code: error.code,
-          position: error.position,
           detail: error.detail,
-          hint: error.hint,
-          where: error.where
+          hint: error.hint
         },
-        modelName,
-        transactionStatus: client.transactionStatus
+        modelName
       });
-      throw error;
+      return { rows: [] };
     }
   },
 

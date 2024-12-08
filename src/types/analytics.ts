@@ -19,6 +19,16 @@ export interface RNGPattern {
   match_quality: 'STRONG' | 'MODERATE' | 'WEAK';
 }
 
+export interface ModelPrediction {
+  model_name: string;
+  model_type: string;
+  prediction_data: {
+    predicted_symbol: number;
+    details?: Record<string, unknown>;
+  };
+  confidence_score: number;
+}
+
 export interface SequenceAnalysis {
   id: number;
   symbol: number;
@@ -26,6 +36,7 @@ export interface SequenceAnalysis {
   entropy_value: number;
   pattern_detected: boolean;
   pattern_strength: number;
+  model_predictions?: ModelPrediction[];
   rng_analysis: {
     lcg_analysis: RNGPattern[];
     xorshift_analysis: RNGPattern[];
